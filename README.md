@@ -18,18 +18,27 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Review the files before 
 ## Requirements
 
 - `sqlite3` and `jq` on `PATH`
-- One `*.sqlite` file per store (ecommerce-data KPI dumps)
-- Optional `shopify` block in `~/.config/omarchy/shell.json`:
+- `ssh` on `PATH` when `dataPath` is remote
+- ecommerce-data KPI sqlite dumps (one `*.sqlite` per store)
+
+Add a `shopify` block to `~/.config/omarchy/shell.json`:
 
 ```json
 "shopify": {
-  "sqliteDir": "~/.cache/omarchy/shopify-data",
-  "timezone": "Europe/London",
-  "remote": "user@host:~/projects/ecommerce-data/data"
+  "dataPath": "zotac:~/projects/data-store",
+  "timezone": "Europe/London"
 }
 ```
 
-Stores are discovered from `*.sqlite` files in `sqliteDir`. To set titles and admin links, list them under `shopify.stores`:
+`dataPath` points at the sqlite directory on the remote host. The plugin queries it over SSH — no local copy.
+
+| `dataPath` | Behaviour |
+|---|---|
+| `zotac:~/projects/data-store` | SSH to `zotac` (default when unset) |
+| `user@host:~/path` | SSH with explicit user |
+| `/local/path` | Local read-only sqlite queries |
+
+Stores are auto-discovered from `*.sqlite` files in `dataPath`. To set titles and admin links explicitly:
 
 ```json
 "stores": [
@@ -37,13 +46,13 @@ Stores are discovered from `*.sqlite` files in `sqliteDir`. To set titles and ad
 ]
 ```
 
-`remote` is an `rsync` source used to refresh the local sqlite copies.
-
 ## Bar
 
 | Click | Action |
 |---|---|
-| Left | Refresh status |
+| Left | Toggle status popup |
+
+Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. Each card uses the store favicon when `{sqliteKey}.favicon.png` is available locally (or next to the sqlite files). The bar reads a local cache on startup (no SSH) and refreshes it in the background every 5 minutes after the popup is first opened.
 
 The bar icon follows theme colours:
 
@@ -51,7 +60,6 @@ The bar icon follows theme colours:
 |---|---|
 | Revenue today | Accent |
 | Store or config error | Urgent |
-| Loading | Busy |
 | No stores | Dimmed |
 
 Hover shows today's revenue and CoS for each store.
@@ -59,9 +67,13 @@ Hover shows today's revenue and CoS for each store.
 ## IPC
 
 ```bash
+omarchy-shell shell toggle evo.shopify '{}'
 omarchy-shell evo.shopify refresh
 ```
 
 | Call | Action |
 |---|---|
+| `open` / `show` | Open the popup |
+| `close` / `hide` | Close the popup |
+| `toggle` | Toggle the popup |
 | `refresh` | Refresh status |

@@ -1,12 +1,10 @@
 #!/bin/bash
 # Shopify KPI JSON for evo.shopify Omarchy bar widget.
 # Reads merged KPI rows from ecommerce-data SQLite (fact_kpi_daily).
-# Currency label for today uses raw_shopify_orders_daily when present.
 #
-# Config (optional overrides via merged shell.json):
-#   shopify.sqliteDir, shopify.remote, shopify.timezone
-# Legacy env: ECOMMERCE_SQLITE_DIR, ECOMMERCE_SQLITE_REMOTE, EVO_SHOPIFY_TZ
-# Stores are auto-discovered from *.sqlite files in the data directory.
+# Config (shell.json shopify block):
+#   dataPath  — host:dir or user@host:dir (remote, default) or local path
+#   timezone, stores
 
 set -euo pipefail
 
@@ -16,44 +14,116 @@ source "${_bin_dir}/common.sh"
 
 merged_config() { cat "${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}" 2>/dev/null || echo '{}'; }
 
-DEFAULT_SQLITE_DIR="$HOME/.cache/omarchy/shopify-data"
-DEFAULT_REMOTE=""
 DEFAULT_TZ="Europe/London"
+DEFAULT_DATA_PATH="zotac:~/projects/data-store"
+DATA_PATH=""
+DATA_MODE=""       # local | remote
+DATA_LOCAL=""      # absolute local data dir
+DATA_SSH=""        # user@host
+DATA_REMOTE_DIR="" # path on remote host
 
 STORES=()
 
-BARS=(" " "▂" "▃" "▄" "▅" "▆" "▇" "█")
+declare -gA REMOTE_KPI=()
+REMOTE_RAW_TODAY=""
+REMOTE_CURRENCY=""
+REMOTE_LATEST_DATE=""
+REMOTE_HAS_SPEND=0
+REMOTE_ERROR=""
 
-discover_stores_from_dir() {
-    local base="$1"
-    local f name key display
+discover_stores_from_names() {
+    local name key display
     STORES=()
-    [[ -d "$base" ]] || return 1
-    shopt -s nullglob
-    for f in "$base"/*.sqlite; do
-        name=$(basename "$f" .sqlite)
-        [[ "$name" == "default" ]] && continue
+    for name in "$@"; do
+        [[ -z "$name" || "$name" == "default" ]] && continue
         key=$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')
         display="${key} "
         STORES+=("${key}|${display}|${name}")
     done
-    shopt -u nullglob
     ((${#STORES[@]} > 0))
 }
 
-load_shopify_config() {
-    local cfg base
+discover_stores_local() {
+    local base=$1 f name
+    [[ -d "$base" ]] || return 1
+    local -a names=()
+    shopt -s nullglob
+    for f in "$base"/*.sqlite; do
+        names+=("$(basename "$f" .sqlite)")
+    done
+    shopt -u nullglob
+    discover_stores_from_names "${names[@]}"
+}
+
+discover_stores_remote() {
+    local listing
+    listing=$(evo_ssh_run "$DATA_SSH" "for f in ${DATA_REMOTE_DIR%/}/*.sqlite; do [[ -f \"\$f\" ]] && basename \"\$f\" .sqlite; done" 2>/dev/null) || return 1
+    local -a names=()
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && names+=("$name")
+    done <<< "$listing"
+    discover_stores_from_names "${names[@]}"
+}
+
+resolve_data_path() {
+    local cfg data_path
     cfg="$(merged_config | jq -c '.shopify // {}')"
     DEFAULT_TZ="$(jq -r '.timezone // "Europe/London"' <<<"$cfg")"
-    DEFAULT_SQLITE_DIR="$(jq -r '.sqliteDir // ""' <<<"$cfg")"
-    DEFAULT_REMOTE="$(jq -r '.remote // ""' <<<"$cfg")"
-    [[ -z "$DEFAULT_SQLITE_DIR" ]] && DEFAULT_SQLITE_DIR="$HOME/Work/ecommerce-data/data"
+    data_path="$(jq -r '.dataPath // ""' <<<"$cfg")"
+    data_path="${data_path// /}"
+    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
 
-    STORES=()
-    base=$(sqlite_data_dir) || true
-    if [[ -n "$base" ]] && discover_stores_from_dir "$base"; then
-        return
+    DATA_PATH="$data_path"
+    DATA_MODE=""
+    DATA_LOCAL=""
+    DATA_SSH=""
+    DATA_REMOTE_DIR=""
+
+    if [[ "$DATA_PATH" =~ ^([^@]+)@([^:]+):(.+)$ ]]; then
+        DATA_MODE=remote
+        DATA_SSH="${BASH_REMATCH[1]}@${BASH_REMATCH[2]}"
+        DATA_REMOTE_DIR="${BASH_REMATCH[3]}"
+    elif [[ "$DATA_PATH" =~ ^([^:@]+):(.+)$ ]]; then
+        DATA_MODE=remote
+        DATA_SSH="${BASH_REMATCH[1]}"
+        DATA_REMOTE_DIR="${BASH_REMATCH[2]}"
+    else
+        DATA_MODE=local
+        DATA_LOCAL="$(readlink -f "${DATA_PATH/#\~/$HOME}")"
+        return 0
     fi
+
+    DATA_REMOTE_DIR="$(evo_resolve_remote_dir "$DATA_SSH" "$DATA_REMOTE_DIR")" || return 1
+}
+
+load_shopify_config() {
+    STORES=()
+    resolve_data_path || return 0
+    if [[ "$DATA_MODE" == local ]]; then
+        discover_stores_local "$DATA_LOCAL" || true
+    elif [[ "$DATA_MODE" == remote ]]; then
+        discover_stores_remote || true
+    fi
+}
+
+config_data_path() {
+    local data_path
+    data_path="$(merged_config | jq -r '.shopify.dataPath // ""')"
+    data_path="${data_path// /}"
+    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
+    printf '%s' "$data_path"
+}
+
+cache_key_slug() {
+    printf '%s' "$(config_data_path)" | tr '/:@~ ' '_'
+}
+
+snapshot_cache_key() {
+    printf 'shopify-%s-snapshot' "$(cache_key_slug)"
+}
+
+store_cache_key() {
+    printf 'shopify-%s-%s-%s' "$(cache_key_slug)" "${1:-all}" "$2"
 }
 
 json_text() {
@@ -65,123 +135,146 @@ json_shopify() {
         --arg text "$1" \
         --arg label "$2" \
         --argjson bars "$3" \
-        --arg store "$4" \
-        --arg symbol "$5" \
-        --argjson orders "$6" \
-        --arg cos "$7" \
-        --arg revenue "$8" \
-        --argjson todayDetail "$9" \
-        --argjson period "${10}" \
-        --argjson channels "${11}" \
-        --argjson orderBars "${12}" \
-        --argjson month "${13}" \
-        --argjson sessionBars "${14}" \
-        --argjson spendBars "${15}" \
-        --argjson cvrBars "${16}" \
-        --argjson aovBars "${17}" \
-        --argjson cosBars "${18}" \
+        --arg symbol "$4" \
+        --argjson orders "$5" \
+        --arg cos "$6" \
+        --arg revenue "$7" \
+        --argjson todayDetail "$8" \
+        --argjson period "$9" \
         '{
             text: $text,
             label: $label,
             bars: $bars,
-            store: $store,
             symbol: $symbol,
             orders: $orders,
             cos: $cos,
             revenue: $revenue,
             todayDetail: $todayDetail,
-            period: $period,
-            channels: $channels,
-            orderBars: $orderBars,
-            month: $month,
-            sessionBars: $sessionBars,
-            spendBars: $spendBars,
-            cvrBars: $cvrBars,
-            aovBars: $aovBars,
-            cosBars: $cosBars
+            period: $period
         }'
 }
 
-remote_spec() {
-    if [[ -n "${ECOMMERCE_SQLITE_REMOTE+x}" ]]; then
-        local v="${ECOMMERCE_SQLITE_REMOTE// /}"
-        if [[ -n "$v" ]]; then printf '%s' "$v"; fi
-        return
-    fi
-    printf '%s' "$DEFAULT_REMOTE"
-}
-
-sqlite_data_dir() {
-    local raw="${ECOMMERCE_SQLITE_DIR:-}"
-    raw="${raw#"${raw%%[![:space:]]*}"}"
-    raw="${raw%"${raw##*[![:space:]]}"}"
-    if [[ -n "$raw" ]]; then
-        readlink -f "${raw/#\~/$HOME}"
-        return
-    fi
-    if [[ -n "$DEFAULT_SQLITE_DIR" ]]; then
-        readlink -f "${DEFAULT_SQLITE_DIR/#\~/$HOME}"
-        return
-    fi
-    readlink -f "$HOME/.cache/omarchy/shopify-data"
-}
-
-sync_remote_sqlite() {
-    local remote_spec=$1 dest=$2
-    mkdir -p "$dest"
-    local src="${remote_spec%/}/"
-    local ssh_opts="ssh -o BatchMode=yes -o ConnectTimeout=8"
-
-    if timeout 40 rsync -az \
-        --include='*.sqlite' --include='*.favicon.png' --exclude='*' --timeout=25 \
-        -e "$ssh_opts" "$src" "${dest}/" 2>/dev/null; then
-        return 0
-    fi
-
-    if [[ "$remote_spec" =~ ^([^@]+)@([^:]+):(.+)$ ]]; then
-        local user="${BASH_REMATCH[1]}" host="${BASH_REMATCH[2]}" dirpath="${BASH_REMATCH[3]%/}"
-        local base="${user}@${host}:${dirpath}"
-        local entry prefix _display site_key
-        for entry in "${STORES[@]}"; do
-            IFS='|' read -r prefix _display site_key <<< "$entry"
-            timeout 35 scp -q \
-                -o BatchMode=yes -o ConnectTimeout=8 \
-                "${base}/${site_key}.sqlite" "${dest}/${site_key}.sqlite" 2>/dev/null || break
-            timeout 35 scp -q \
-                -o BatchMode=yes -o ConnectTimeout=8 \
-                "${base}/${site_key}.favicon.png" "${dest}/${site_key}.favicon.png" 2>/dev/null || true
-        done
-    fi
-}
-
-sqlite_base() {
-    local dest remote
-    dest=$(sqlite_data_dir)
-    [[ -n "$dest" ]] || return 1
-    remote=$(remote_spec)
-    if [[ -n "$remote" ]]; then
-        sync_remote_sqlite "$remote" "$dest" >/dev/null
-    fi
-    printf '%s' "$dest"
-}
-
 site_sqlite_path() {
-    local site_key=$1 base=$2
-    local safe
+    local site_key=$1
+    local safe base
     safe=$(printf '%s' "$site_key" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/_/g')
+    if [[ "$DATA_MODE" == remote ]]; then
+        base="${DATA_REMOTE_DIR%/}"
+    else
+        base="${DATA_LOCAL%/}"
+    fi
     printf '%s/%s.sqlite' "$base" "$safe"
+}
+
+remote_fetch_store_data() {
+    local db=$1 today_s=$2 start_date=$3
+    local output line tag rest dt
+
+    evo_valid_date "$today_s" || return 1
+    evo_valid_date "$start_date" || return 1
+
+    REMOTE_KPI=()
+    REMOTE_RAW_TODAY=""
+    REMOTE_CURRENCY=""
+    REMOTE_LATEST_DATE=""
+    REMOTE_HAS_SPEND=0
+    REMOTE_ERROR=""
+
+    output=$(evo_ssh_run "$DATA_SSH" bash -s -- \
+        "$(printf '%q' "$db")" \
+        "$(printf '%q' "$today_s")" \
+        "$(printf '%q' "$start_date")" <<'REMOTE'
+set -euo pipefail
+db=$1
+today=$2
+start=$3
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "ERROR|sqlite3 not found on remote host"
+  exit 0
+fi
+if [[ ! -f "$db" ]]; then
+  echo "ERROR|database not found"
+  exit 0
+fi
+
+spend_col="NULL"
+if sqlite3 -readonly "$db" "PRAGMA table_info(fact_kpi_daily)" | cut -d'|' -f2 | grep -qx 'google_spend'; then
+  spend_col="google_spend"
+  echo "HAS_SPEND|1"
+else
+  echo "HAS_SPEND|0"
+fi
+
+currency=$(sqlite3 -readonly "$db" "SELECT COALESCE(currency_code, '') FROM raw_shopify_orders_daily WHERE dt = '${today}';" 2>/dev/null || true)
+echo "CURRENCY|${currency}"
+
+latest=$(sqlite3 -readonly "$db" "SELECT dt FROM fact_kpi_daily WHERE dt <= '${today}' AND (COALESCE(revenue, 0) > 0 OR COALESCE(orders, 0) > 0 OR COALESCE(sessions, 0) > 0) ORDER BY dt DESC LIMIT 1;" 2>/dev/null || true)
+echo "LATEST|${latest}"
+
+sqlite3 -readonly -separator '|' "$db" \
+  "SELECT dt, COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col} FROM fact_kpi_daily WHERE dt >= '${start}' AND dt <= '${today}';" \
+  | while IFS='|' read -r dt rev orders sessions spend; do
+      [[ -n "$dt" ]] || continue
+      printf 'KPI|%s|%s|%s|%s|%s\n' \
+        "$dt" "${rev:-0}" "${orders:-0}" "${sessions:-0}" "${spend:-}"
+    done
+
+raw=$(sqlite3 -readonly -separator '|' "$db" \
+  "SELECT COALESCE(gross_revenue, 0), COALESCE(order_count, 0), COALESCE(shopify_sessions, 0) FROM raw_shopify_orders_daily WHERE dt = '${today}';" 2>/dev/null \
+  || printf '0|0|0')
+echo "RAW|${today}|${raw}"
+REMOTE
+    ) || return 1
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        tag="${line%%|*}"
+        rest="${line#*|}"
+        case "$tag" in
+            ERROR)
+                REMOTE_ERROR="$rest"
+                echo "shopify-status: remote: ${rest}" >&2
+                return 1
+                ;;
+            HAS_SPEND)
+                [[ "$rest" == "1" ]] && REMOTE_HAS_SPEND=1
+                ;;
+            CURRENCY)
+                REMOTE_CURRENCY="$rest"
+                ;;
+            LATEST)
+                REMOTE_LATEST_DATE="$rest"
+                ;;
+            KPI)
+                dt="${rest%%|*}"
+                REMOTE_KPI["$dt"]="${rest#*|}"
+                ;;
+            RAW)
+                REMOTE_RAW_TODAY="${rest#*|}"
+                ;;
+        esac
+    done <<< "$output"
 }
 
 has_google_spend_column() {
     local db=$1
+    if [[ "$DATA_MODE" == remote ]]; then
+        (( REMOTE_HAS_SPEND == 1 ))
+        return
+    fi
     sqlite3 -readonly "$db" "PRAGMA table_info(fact_kpi_daily)" | cut -d'|' -f2 | grep -qx 'google_spend' || return 1
 }
 
 get_day_kpi() {
     local db=$1 dt=$2 spend_col=$3
+    if [[ "$DATA_MODE" == remote ]]; then
+        printf '%s\n' "${REMOTE_KPI[$dt]:-0|0|0|}"
+        return
+    fi
     sqlite3 -readonly -separator '|' "$db" \
-        "SELECT COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col}, gross_margin_pct, cvr, COALESCE(paid_revenue,0), COALESCE(organic_revenue,0), COALESCE(direct_revenue,0), COALESCE(email_revenue,0), gross_margin FROM fact_kpi_daily WHERE dt = '${dt}';" 2>/dev/null \
-        || printf '0|0|0|||0|0|0|0|'
+        "SELECT COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col} FROM fact_kpi_daily WHERE dt = '${dt}';" 2>/dev/null \
+        || printf '0|0|0|'
 }
 
 kpi_day_has_data() {
@@ -193,6 +286,10 @@ kpi_day_has_data() {
 
 get_latest_kpi_date() {
     local db=$1 max_dt=$2
+    if [[ "$DATA_MODE" == remote ]]; then
+        printf '%s' "$REMOTE_LATEST_DATE"
+        return
+    fi
     sqlite3 -readonly "$db" \
         "SELECT dt FROM fact_kpi_daily
          WHERE dt <= '${max_dt}'
@@ -203,6 +300,10 @@ get_latest_kpi_date() {
 
 get_raw_shopify_day() {
     local db=$1 dt=$2
+    if [[ "$DATA_MODE" == remote ]]; then
+        printf '%s\n' "${REMOTE_RAW_TODAY:-0|0|0}"
+        return
+    fi
     sqlite3 -readonly -separator '|' "$db" \
         "SELECT COALESCE(gross_revenue, 0), COALESCE(order_count, 0), COALESCE(shopify_sessions, 0)
          FROM raw_shopify_orders_daily
@@ -210,36 +311,14 @@ get_raw_shopify_day() {
         || printf '0|0|0'
 }
 
-get_month_mtd_revenue() {
-    local db=$1 month_start=$2 today=$3
-    sqlite3 -readonly "$db" \
-        "SELECT COALESCE(SUM(revenue), 0) FROM fact_kpi_daily WHERE dt >= '${month_start}' AND dt <= '${today}';" 2>/dev/null \
-        || printf '0'
-}
-
-get_day_stats() {
-    local db=$1 dt=$2 spend_col=$3
-    local row rev n spend cos
-    row=$(sqlite3 -readonly -separator '|' "$db" \
-        "SELECT revenue, orders, ${spend_col} FROM fact_kpi_daily WHERE dt = '${dt}';" 2>/dev/null || true)
-
-    if [[ -z "$row" ]]; then
-        printf '0|0|'
+get_currency_code() {
+    local db=$1 today_s=$2
+    if [[ "$DATA_MODE" == remote ]]; then
+        printf '%s' "$REMOTE_CURRENCY"
         return
     fi
-
-    IFS='|' read -r rev n spend <<< "$row"
-    rev=${rev:-0}
-    n=${n:-0}
-
-    cos=""
-    if [[ -n "$spend" && "$spend" != "NULL" ]]; then
-        cos=$(awk -v s="$spend" -v r="$rev" 'BEGIN {
-            if (r > 0) printf "%.10f", s / r
-        }')
-    fi
-
-    printf '%s|%s|%s' "$rev" "$n" "$cos"
+    sqlite3 -readonly "$db" \
+        "SELECT currency_code FROM raw_shopify_orders_daily WHERE dt = '${today_s}';" 2>/dev/null || true
 }
 
 currency_symbol() {
@@ -265,58 +344,6 @@ format_int_commas() {
         }
         print out
     }'
-}
-
-generate_sales_chart() {
-    local -a sales=("$@")
-    local chart="" i sale max_sale bar_level color_level bar_char color pct
-
-    max_sale=$(printf '%s\n' "${sales[@]}" | awk '
-        { v = ($1 == "" ? 0 : $1); if (v < 0) v = 0; if (v > max) max = v }
-        END { print max + 0 }
-    ')
-
-    if awk -v m="$max_sale" 'BEGIN { exit (m == 0) ? 0 : 1 }'; then
-        printf "<span foreground='%s'>%s</span>" "${GITHUB_COLORS[0]}" "$(printf '%.0s ' {1..14})"
-        return
-    fi
-
-    for sale in "${sales[@]}"; do
-        read -r bar_level color_level bar_char <<< "$(awk -v sale="$sale" -v max="$max_sale" 'BEGIN {
-            s = (sale == "" ? 0 : sale + 0)
-            if (s < 0) s = 0
-
-            bar_level = 0
-            if (s > 0) {
-                bar_level = int((s / max) * 7)
-                if (bar_level == 0) bar_level = 1
-            }
-            if (bar_level > 7) bar_level = 7
-
-            color_level = 0
-            if (s > 0) {
-                pct = s / max
-                if (pct > 0.75) color_level = 4
-                else if (pct > 0.5) color_level = 3
-                else if (pct > 0.25) color_level = 2
-                else color_level = 1
-            }
-            bars[0] = " "
-            bars[1] = "▂"
-            bars[2] = "▃"
-            bars[3] = "▄"
-            bars[4] = "▅"
-            bars[5] = "▆"
-            bars[6] = "▇"
-            bars[7] = "█"
-
-            print bar_level, color_level, bars[bar_level]
-        }')"
-        color="${GITHUB_COLORS[$color_level]}"
-        chart+="<span foreground='${color}'>${bar_char}</span>"
-    done
-
-    printf '%s' "$chart"
 }
 
 build_sparkline_json() {
@@ -383,25 +410,185 @@ find_store() {
     return 1
 }
 
-main() {
+data_path_ready() {
+    case "$DATA_MODE" in
+        local)
+            [[ -n "$DATA_LOCAL" && -d "$DATA_LOCAL" ]]
+            ;;
+        remote)
+            [[ -n "$DATA_SSH" && -n "$DATA_REMOTE_DIR" ]]
+            ;;
+        *)
+            false
+            ;;
+    esac
+}
+
+EMPTY_SNAPSHOT='{"stores":[],"payloads":{}}'
+SNAPSHOT_DAYS=30
+
+snapshot_with_icons() {
+    local snap=$1
+    local stores payloads store sqlite_key icon new_stores
+    stores=$(jq -c '.stores // []' <<<"$snap")
+    payloads=$(jq -c '.payloads // {}' <<<"$snap")
+    new_stores='[]'
+    while IFS= read -r store; do
+        [[ -n "$store" ]] || continue
+        sqlite_key=$(jq -r '.sqliteKey // (.key | ascii_downcase)' <<<"$store")
+        icon=$(evo_resolve_icon_path "$sqlite_key" "${DATA_LOCAL:-}" 2>/dev/null || true)
+        new_stores=$(jq -c --argjson s "$store" --arg icon "$icon" '. + [$s + {iconPath: $icon}]' <<<"$new_stores")
+    done < <(jq -c '.[]' <<<"$stores")
+    jq -c --argjson stores "$new_stores" '{stores: $stores, payloads: .}' <<<"$payloads"
+}
+
+cache_favicons() {
+    local listing remote_file dest base
+    mkdir -p "$EVO_SHOPIFY_ICON_DIR"
+    if [[ "$DATA_MODE" == local ]]; then
+        [[ -n "$DATA_LOCAL" && -d "$DATA_LOCAL" ]] || return 0
+        shopt -s nullglob
+        for dest in "${DATA_LOCAL%/}"/*.favicon.png; do
+            cp -f "$dest" "$EVO_SHOPIFY_ICON_DIR/"
+        done
+        shopt -u nullglob
+        return 0
+    fi
+    [[ "$DATA_MODE" == remote && -n "$DATA_SSH" && -n "$DATA_REMOTE_DIR" ]] || return 0
+    listing=$(evo_ssh_run "$DATA_SSH" "ls ${DATA_REMOTE_DIR%/}/*.favicon.png 2>/dev/null" || true)
+    while IFS= read -r remote_file; do
+        [[ -n "$remote_file" ]] || continue
+        base=$(basename "$remote_file")
+        dest="${EVO_SHOPIFY_ICON_DIR}/${base}"
+        scp "${EVO_SSH_OPTS[@]}" "${DATA_SSH}:${remote_file}" "$dest" >/dev/null 2>&1 || true
+    done <<< "$listing"
+}
+
+cmd_cache() {
+    local cached slug prefix f base key stores payloads_json one snapshot
+    if cached=$(evo_bar_cache_read_any "$(snapshot_cache_key)" 2>/dev/null); then
+        snapshot_with_icons "$cached"
+        return 0
+    fi
+
+    slug=$(cache_key_slug)
+    prefix="shopify-${slug}-"
+    stores='[]'
+    payloads_json='{}'
+    shopt -s nullglob
+    for f in "${EVO_BAR_CACHE_DIR}/${prefix}"*-"${SNAPSHOT_DAYS}.json"; do
+        base=$(basename "$f" ".json")
+        key="${base#"$prefix"}"
+        key="${key%-${SNAPSHOT_DAYS}}"
+        [[ "$key" == "snapshot" || "$key" == "all" || -z "$key" ]] && continue
+        one=$(cat "$f")
+        [[ -n "$one" ]] || continue
+        stores=$(jq -c --arg key "$key" --arg title "$key" --arg sqliteKey "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" \
+            '. + [{key: $key, title: $title, adminSlug: "", sqliteKey: $sqliteKey}]' <<<"$stores")
+        payloads_json=$(jq -c --arg k "$key" --argjson v "$one" '. + {($k): $v}' <<<"$payloads_json")
+    done
+    shopt -u nullglob
+
+    if [[ "$stores" == "[]" ]]; then
+        printf '%s\n' "$EMPTY_SNAPSHOT"
+        return 0
+    fi
+
+    snapshot=$(snapshot_with_icons "$(jq -c --argjson stores "$stores" '{stores: $stores, payloads: .}' <<<"$payloads_json")")
+    printf '%s\n' "$snapshot" | evo_bar_cache_write "$(snapshot_cache_key)"
+    printf '%s\n' "$snapshot"
+}
+
+stores_json() {
+    local entry prefix display site_key title admin_slug sqlite_key icon_path
+    local -a lines=()
+    local cfg_json cfg_count
+
+    cfg_json="$(merged_config | jq -c '.shopify.stores // []')"
+    cfg_count="$(jq -r 'length' <<<"$cfg_json")"
+
+    if [[ "$cfg_count" -gt 0 ]]; then
+        while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            prefix="$(jq -r '.key // ""' <<<"$entry")"
+            [[ -n "$prefix" ]] || continue
+            title="$(jq -r '.title // .key // ""' <<<"$entry")"
+            admin_slug="$(jq -r '.adminSlug // ""' <<<"$entry")"
+            sqlite_key="$(jq -r '.sqliteKey // (.key | ascii_downcase)' <<<"$entry")"
+            icon_path="$(evo_resolve_icon_path "$sqlite_key" "${DATA_LOCAL:-}" 2>/dev/null || true)"
+            lines+=("$(jq -cn --arg key "$prefix" --arg title "$title" --arg adminSlug "$admin_slug" --arg sqliteKey "$sqlite_key" --arg iconPath "$icon_path" \
+                '{key: $key, title: $title, adminSlug: $adminSlug, sqliteKey: $sqliteKey, iconPath: $iconPath}')")
+        done < <(jq -c '.[]' <<<"$cfg_json")
+    else
+        if ((${#STORES[@]} == 0)) && data_path_ready; then
+            if [[ "$DATA_MODE" == local ]]; then
+                discover_stores_local "$DATA_LOCAL" || true
+            else
+                discover_stores_remote || true
+            fi
+        fi
+        for entry in "${STORES[@]}"; do
+            IFS='|' read -r prefix display site_key <<< "$entry"
+            title="${display%% }"
+            [[ -z "$title" ]] && title="$prefix"
+            icon_path="$(evo_resolve_icon_path "$site_key" "${DATA_LOCAL:-}" 2>/dev/null || true)"
+            lines+=("$(jq -cn --arg key "$prefix" --arg title "$title" --arg sqliteKey "$site_key" --arg iconPath "$icon_path" \
+                '{key: $key, title: $title, adminSlug: "", sqliteKey: $sqliteKey, iconPath: $iconPath}')")
+        done
+    fi
+
+    if ((${#lines[@]} == 0)); then
+        printf '[]'
+    else
+        printf '%s\n' "${lines[@]}" | jq -s -c '.'
+    fi
+}
+
+cmd_refresh() {
+    local stores payloads_json key one snapshot
     load_shopify_config
-    local store_prefix=${1:-}
-    local days=${2:-14}
+    evo_bar_load_heatmap_colors
+
+    if ! data_path_ready; then
+        cmd_cache
+        return 0
+    fi
+
+    cache_favicons
+    stores=$(stores_json)
+    payloads_json='{}'
+
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        if ! one=$(build_one_store "$key" "$SNAPSHOT_DAYS"); then
+            [[ -n "$one" ]] || one=$(json_text "Error: Store ${key} not found")
+        fi
+        payloads_json=$(jq -c --arg k "$key" --argjson v "$one" '. + {($k): $v}' <<<"$payloads_json")
+        printf '%s\n' "$one" | evo_bar_cache_write "$(store_cache_key "$key" "$SNAPSHOT_DAYS")"
+    done < <(jq -r '.[].key // empty' <<<"$stores")
+
+    if [[ "$payloads_json" == "{}" && "$stores" == "[]" ]]; then
+        cmd_cache
+        return 0
+    fi
+
+    snapshot=$(snapshot_with_icons "$(jq -c --argjson stores "$stores" '{stores: $stores, payloads: .}' <<<"$payloads_json")")
+    printf '%s\n' "$snapshot" | evo_bar_cache_write "$(snapshot_cache_key)"
+    printf '%s\n' "$snapshot"
+}
+
+build_one_store() {
+    local store_prefix=$1
+    local days=$2
+    local days_back output
+
     if ! [[ "$days" =~ ^[0-9]+$ ]] || (( days < 1 )); then
         days=14
     fi
     if (( days > 90 )); then
         days=90
     fi
-    local cache_key="shopify-${store_prefix:-all}-${days}"
-    local cached output
-
-    if cached=$(evo_bar_cache_read "$cache_key" 300 2>/dev/null); then
-        printf '%s\n' "$cached"
-        return 0
-    fi
-
-    local days_back=$((days - 1))
+    days_back=$((days - 1))
 
     local tz_name="${EVO_SHOPIFY_TZ:-$DEFAULT_TZ}"
     tz_name="${tz_name// /}"
@@ -409,28 +596,17 @@ main() {
 
     evo_bar_load_heatmap_colors
 
-    local today_s i day_iso base db_path spend_col
-    local rev orders cos sym sales_chart today_sales_val cos_str output_text
-    local spend cvr gmp gm paid_rev org_rev dir_rev email_rev
-    local period_rev period_orders period_sessions
-    local month_start day_of_month days_in_month mtd_revenue forecast_revenue
-    local today_detail_json period_json channels_json order_bars_json month_json
-    local session_bars_json spend_bars_json cvr_bars_json aov_bars_json cos_bars_json
-    local -a chart_sales=()
+    local today_s start_date i day_iso db_path spend_col
+    local rev orders sessions spend cos sym today_sales_val cos_str
+    local period_rev
+    local today_detail_json period_json sparkline_json
     local -a chart_days=()
-    local -a chart_order_days=()
-    local -a chart_session_days=()
-    local -a chart_spend_days=()
-    local -a chart_cvr_days=()
-    local -a chart_aov_days=()
-    local -a chart_cos_days=()
 
     today_s=$(TZ="$tz_name" date +%Y-%m-%d)
-    base=$(sqlite_base || true)
-    if [[ -z "$base" || ! -d "$base" ]]; then
-        output=$(json_text "Shopify: configure ECOMMERCE_SQLITE_DIR")
-        printf '%s\n' "$output" | evo_bar_cache_write "$cache_key"
-        printf '%s\n' "$output"
+    start_date=$(TZ="$tz_name" date -d "${today_s} - ${days_back} days" +%Y-%m-%d)
+
+    if ! data_path_ready; then
+        json_text "Shopify: set shopify.dataPath in shell.json"
         return 0
     fi
 
@@ -440,18 +616,26 @@ main() {
             return 1
         fi
     else
+        if ((${#STORES[@]} == 0)); then
+            json_text "Shopify: no stores found"
+            return 0
+        fi
         IFS='|' read -r STORE_PREFIX STORE_DISPLAY STORE_SITE_KEY <<< "${STORES[0]}"
     fi
 
-    db_path=$(site_sqlite_path "$STORE_SITE_KEY" "$base")
-    if [[ ! -f "$db_path" ]]; then
-        json_text "${STORE_DISPLAY}: no db (${db_path})"
-        return 1
-    fi
+    db_path=$(site_sqlite_path "$STORE_SITE_KEY")
 
-    if ! sqlite3 -readonly "$db_path" "SELECT 1;" >/dev/null 2>&1; then
-        echo "shopify-status: ${db_path}: db error" >&2
-        json_text "${STORE_DISPLAY}: db error"
+    if [[ "$DATA_MODE" == remote ]]; then
+        if ! remote_fetch_store_data "$db_path" "$today_s" "$start_date"; then
+            if [[ "$REMOTE_ERROR" == "database not found" ]]; then
+                json_text "${STORE_DISPLAY}: no db (${db_path})"
+            else
+                json_text "${STORE_DISPLAY}: remote db error"
+            fi
+            return 1
+        fi
+    elif [[ ! -f "$db_path" ]] || ! sqlite3 -readonly "$db_path" "SELECT 1;" >/dev/null 2>&1; then
+        json_text "${STORE_DISPLAY}: no db (${db_path})"
         return 1
     fi
 
@@ -462,71 +646,20 @@ main() {
     fi
 
     period_rev=0
-    period_orders=0
-    period_sessions=0
-    period_spend=0
-    period_paid=0
-    period_organic=0
-    period_direct=0
-    period_email=0
 
     for i in $(seq "$days_back" -1 0); do
         day_iso=$(TZ="$tz_name" date -d "${today_s} - ${i} days" +%Y-%m-%d)
-        IFS='|' read -r rev orders sessions spend gmp cvr paid_rev org_rev dir_rev email_rev gm <<< "$(get_day_kpi "$db_path" "$day_iso" "$spend_col")"
+        IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$day_iso" "$spend_col")"
         rev=${rev:-0}
         orders=${orders:-0}
-        sessions=${sessions:-0}
-        chart_sales+=("$rev")
         chart_days+=("${day_iso}|${rev}|${orders}")
-        chart_order_days+=("${day_iso}|${orders}|0")
-        chart_session_days+=("${day_iso}|${sessions}|0")
-        chart_spend_days+=("${day_iso}|$(
-            if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
-                awk -v s="$spend" 'BEGIN { printf "%.2f", s + 0 }'
-            else
-                printf '0'
-            fi
-        )|0")
-        chart_cvr_days+=("${day_iso}|$(
-            if [[ -n "$cvr" && "$cvr" != "NULL" && "$cvr" != "" ]]; then
-                awk -v v="$cvr" 'BEGIN { printf "%.6f", v + 0 }'
-            else
-                printf '0'
-            fi
-        )|0")
-        chart_aov_days+=("${day_iso}|$(
-            awk -v r="$rev" -v o="$orders" 'BEGIN {
-                if (o + 0 > 0) printf "%.2f", r / o
-                else print "0"
-            }'
-        )|0")
-        chart_cos_days+=("${day_iso}|$(
-            if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
-                awk -v s="$spend" -v r="$rev" 'BEGIN {
-                    if (r + 0 > 0) printf "%.6f", s / r
-                    else print "0"
-                }'
-            else
-                printf '0'
-            fi
-        )|0")
         period_rev=$(awk -v a="$period_rev" -v b="$rev" 'BEGIN { printf "%.2f", a + b }')
-        period_orders=$((period_orders + $(awk -v o="$orders" 'BEGIN { print int(o + 0) }')))
-        period_sessions=$((period_sessions + $(awk -v s="$sessions" 'BEGIN { print int(s + 0) }')))
-        period_paid=$(awk -v a="$period_paid" -v b="${paid_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
-        period_organic=$(awk -v a="$period_organic" -v b="${org_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
-        period_direct=$(awk -v a="$period_direct" -v b="${dir_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
-        period_email=$(awk -v a="$period_email" -v b="${email_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
-        if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
-            period_spend=$(awk -v a="$period_spend" -v b="$spend" 'BEGIN { printf "%.2f", a + b }')
-        fi
     done
 
-    sym=$(currency_symbol "$(sqlite3 -readonly "$db_path" \
-        "SELECT currency_code FROM raw_shopify_orders_daily WHERE dt = '${today_s}';" 2>/dev/null || true)")
+    sym=$(currency_symbol "$(get_currency_code "$db_path" "$today_s")")
 
     local kpi_date="$today_s"
-    IFS='|' read -r rev orders sessions spend gmp cvr paid_rev org_rev dir_rev email_rev gm <<< "$(get_day_kpi "$db_path" "$today_s" "$spend_col")"
+    IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$today_s" "$spend_col")"
     rev=${rev:-0}
     orders=${orders:-0}
     sessions=${sessions:-0}
@@ -539,15 +672,12 @@ main() {
             orders="$raw_orders"
             sessions="$raw_sessions"
             spend=""
-            gmp=""
-            cvr=""
-            gm=""
             kpi_date="$today_s"
         else
             latest_date="$(get_latest_kpi_date "$db_path" "$today_s")"
             if [[ -n "$latest_date" ]]; then
                 kpi_date="$latest_date"
-                IFS='|' read -r rev orders sessions spend gmp cvr paid_rev org_rev dir_rev email_rev gm <<< "$(get_day_kpi "$db_path" "$kpi_date" "$spend_col")"
+                IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$kpi_date" "$spend_col")"
                 rev=${rev:-0}
                 orders=${orders:-0}
                 sessions=${sessions:-0}
@@ -562,14 +692,7 @@ main() {
         }')
     fi
 
-    sales_chart=$(generate_sales_chart "${chart_sales[@]}")
     sparkline_json=$(build_sparkline_json "${chart_days[@]}")
-    order_bars_json=$(build_sparkline_json "${chart_order_days[@]}")
-    session_bars_json=$(build_sparkline_json "${chart_session_days[@]}")
-    spend_bars_json=$(build_sparkline_json "${chart_spend_days[@]}")
-    cvr_bars_json=$(build_sparkline_json "${chart_cvr_days[@]}")
-    aov_bars_json=$(build_sparkline_json "${chart_aov_days[@]}")
-    cos_bars_json=$(build_sparkline_json "${chart_cos_days[@]}")
     today_sales_val=$(format_int_commas "$(awk -v r="$rev" 'BEGIN { print int(r + 0) }')")
 
     if [[ -n "$cos" ]]; then
@@ -579,7 +702,6 @@ main() {
     fi
 
     label_text="${STORE_DISPLAY}${sym}${today_sales_val} | ${cos_str}"
-    output_text="${label_text} ${sales_chart}"
 
     orders_n=$(awk -v o="${orders:-0}" 'BEGIN { print int(o + 0) }')
     revenue_n=$(awk -v r="${rev:-0}" 'BEGIN { printf "%.2f", r + 0 }')
@@ -589,139 +711,69 @@ main() {
         --arg calendarDate "$today_s" \
         --argjson revenue "$revenue_n" \
         --argjson orders "$orders_n" \
-        --argjson sessions "$(awk -v s="$sessions" 'BEGIN { print int(s + 0) }')" \
         --arg cos "$cos_str" \
-        --argjson spend "$(awk -v s="${spend:-}" 'BEGIN {
-            if (s == "" || s == "NULL") print "null"
-            else printf "%.2f", s + 0
-        }')" \
-        --argjson cvr "$(awk -v v="${cvr:-}" 'BEGIN {
-            if (v == "" || v == "NULL") print "null"
-            else printf "%.6f", v + 0
-        }')" \
-        --argjson marginPct "$(awk -v v="${gmp:-}" 'BEGIN {
-            if (v == "" || v == "NULL") print "null"
-            else printf "%.6f", v + 0
-        }')" \
-        --argjson margin "$(awk -v v="${gm:-}" 'BEGIN {
-            if (v == "" || v == "NULL") print "null"
-            else printf "%.2f", v + 0
-        }')" \
         '{
             date: $date,
             calendarDate: $calendarDate,
             revenue: $revenue,
             orders: $orders,
-            sessions: $sessions,
-            cos: $cos,
-            spend: $spend,
-            cvr: $cvr,
-            marginPct: $marginPct,
-            margin: $margin
+            cos: $cos
         }')
 
     period_json=$(jq -cn \
         --argjson days "$days" \
         --argjson revenue "$(awk -v r="$period_rev" 'BEGIN { printf "%.2f", r + 0 }')" \
-        --argjson orders "$period_orders" \
-        --argjson sessions "$period_sessions" \
-        --argjson spend "$(awk -v s="$period_spend" 'BEGIN {
-            if (s + 0 <= 0) print "null"
-            else printf "%.2f", s + 0
-        }')" \
         '{
             days: $days,
-            revenue: $revenue,
-            orders: $orders,
-            sessions: $sessions,
-            spend: $spend
+            revenue: $revenue
         }')
 
-    channels_json=$(jq -cn \
-        --argjson paid "$(awk -v v="$period_paid" 'BEGIN { printf "%.2f", v + 0 }')" \
-        --argjson organic "$(awk -v v="$period_organic" 'BEGIN { printf "%.2f", v + 0 }')" \
-        --argjson direct "$(awk -v v="$period_direct" 'BEGIN { printf "%.2f", v + 0 }')" \
-        --argjson email "$(awk -v v="$period_email" 'BEGIN { printf "%.2f", v + 0 }')" \
-        '{paid: $paid, organic: $organic, direct: $direct, email: $email}')
+    output=$(json_shopify "$label_text" "$label_text" "$sparkline_json" "$sym" \
+        "$orders_n" "$cos_str" "$revenue_n" "$today_detail_json" "$period_json")
+    printf '%s\n' "$output"
+}
 
-    month_start=$(TZ="$tz_name" date -d "${today_s}" +%Y-%m-01)
-    day_of_month=$(TZ="$tz_name" date -d "${today_s}" +%d)
-    days_in_month=$(TZ="$tz_name" date -d "${month_start} +1 month -1 day" +%d)
-    mtd_revenue=$(get_month_mtd_revenue "$db_path" "$month_start" "$today_s")
-    mtd_revenue=${mtd_revenue:-0}
-    forecast_revenue=$(awk -v mtd="$mtd_revenue" -v day="$day_of_month" -v dim="$days_in_month" 'BEGIN {
-        d = day + 0
-        if (d <= 0) { print "0"; exit }
-        printf "%.2f", (mtd + 0) / d * (dim + 0)
-    }')
+main() {
+    local store_prefix=${1:-}
+    local days=${2:-14}
+    local cache_key cached output
 
-    month_json=$(jq -cn \
-        --argjson mtdRevenue "$(awk -v r="$mtd_revenue" 'BEGIN { printf "%.2f", r + 0 }')" \
-        --argjson forecastRevenue "$forecast_revenue" \
-        --argjson day "$day_of_month" \
-        --argjson daysInMonth "$days_in_month" \
-        '{
-            mtdRevenue: $mtdRevenue,
-            forecastRevenue: $forecastRevenue,
-            day: $day,
-            daysInMonth: $daysInMonth
-        }')
+    if ! [[ "$days" =~ ^[0-9]+$ ]] || (( days < 1 )); then
+        days=14
+    fi
+    if (( days > 90 )); then
+        days=90
+    fi
+    cache_key="$(store_cache_key "${store_prefix:-all}" "$days")"
 
-    output=$(json_shopify "$output_text" "$label_text" "$sparkline_json" "${STORE_DISPLAY}" "$sym" \
-        "$orders_n" "$cos_str" "$revenue_n" "$today_detail_json" "$period_json" "$channels_json" "$order_bars_json" "$month_json" \
-        "$session_bars_json" "$spend_bars_json" "$cvr_bars_json" "$aov_bars_json" "$cos_bars_json")
+    if cached=$(evo_bar_cache_read_any "$cache_key" 2>/dev/null); then
+        printf '%s\n' "$cached"
+        return 0
+    fi
+
+    load_shopify_config
+    evo_bar_load_heatmap_colors
+    output=$(build_one_store "$store_prefix" "$days") || return 1
     printf '%s\n' "$output" | evo_bar_cache_write "$cache_key"
     printf '%s\n' "$output"
 }
 
 cmd_stores() {
-    load_shopify_config
-    local entry prefix display site_key title admin_slug sqlite_key icon_path base
-    local -a lines=()
-    local cfg_json cfg_count
-
-    base=$(sqlite_base || true)
-
-    cfg_json="$(merged_config | jq -c '.shopify.stores // []')"
-    cfg_count="$(jq -r 'length' <<<"$cfg_json")"
-
-    if [[ "$cfg_count" -gt 0 ]]; then
-        while IFS= read -r entry; do
-            [[ -n "$entry" ]] || continue
-            prefix="$(jq -r '.key // ""' <<<"$entry")"
-            [[ -n "$prefix" ]] || continue
-            title="$(jq -r '.title // .key // ""' <<<"$entry")"
-            admin_slug="$(jq -r '.adminSlug // ""' <<<"$entry")"
-            sqlite_key="$(jq -r '.sqliteKey // (.key | ascii_downcase)' <<<"$entry")"
-            icon_path=""
-            if [[ -n "$base" ]]; then
-                icon_path="$(evo_resolve_icon_path "$sqlite_key" "$base" 2>/dev/null || true)"
-            fi
-            lines+=("$(jq -cn --arg key "$prefix" --arg title "$title" --arg adminSlug "$admin_slug" --arg sqliteKey "$sqlite_key" --arg iconPath "$icon_path" \
-                '{key: $key, title: $title, adminSlug: $adminSlug, sqliteKey: $sqliteKey, iconPath: $iconPath}')")
-        done < <(jq -c '.[]' <<<"$cfg_json")
-    else
-        for entry in "${STORES[@]}"; do
-            IFS='|' read -r prefix display site_key <<< "$entry"
-            title="${display%% }"
-            [[ -z "$title" ]] && title="$prefix"
-            icon_path=""
-            if [[ -n "$base" ]]; then
-                icon_path="$(evo_resolve_icon_path "$site_key" "$base" 2>/dev/null || true)"
-            fi
-            lines+=("$(jq -cn --arg key "$prefix" --arg title "$title" --arg sqliteKey "$site_key" --arg iconPath "$icon_path" \
-                '{key: $key, title: $title, adminSlug: "", sqliteKey: $sqliteKey, iconPath: $iconPath}')")
-        done
+    local cached
+    if cached=$(evo_bar_cache_read_any "$(snapshot_cache_key)" 2>/dev/null); then
+        jq -c '.stores // []' <<<"$cached"
+        return 0
     fi
-
-    if ((${#lines[@]} == 0)); then
-        printf '[]\n'
-    else
-        printf '%s\n' "${lines[@]}" | jq -s '.'
-    fi
+    printf '[]\n'
 }
 
 case "${1:-}" in
+    cache)
+        cmd_cache
+        ;;
+    refresh)
+        cmd_refresh
+        ;;
     stores)
         cmd_stores
         ;;

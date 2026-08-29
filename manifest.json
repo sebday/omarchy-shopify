@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "evo.shopify",
   "name": "Shopify",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "seb",
   "description": "Multi-store Shopify revenue bar widget",
   "kinds": [

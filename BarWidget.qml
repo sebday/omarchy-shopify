@@ -1,147 +1,66 @@
 import QtQuick
-import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Model.js" as Model
 
 BarWidget {
   id: root
   moduleName: "evo.shopify"
 
-  readonly property string statusScript: Qt.resolvedUrl("bin/shopify-status").toString().replace("file://", "")
-  readonly property int pollIntervalMs: 300000
-
-  property var storeDefs: []
-  property bool storesLoading: true
-  property string storesError: ""
-  property var storePayloads: []
-  property int payloadGen: 0
-  property int payloadIndex: 0
-  property int activePayloadGen: 0
-
-  readonly property var firstStoreData: storePayloads.length > 0 ? storePayloads[0] : null
-  readonly property bool hasStores: storeDefs.length > 0
-  readonly property bool iconActive: Model.iconActiveFromStore(firstStoreData)
-  readonly property bool iconError: !storesLoading && storesError !== ""
-  readonly property bool iconBusy: storesLoading && !hasStores
-  readonly property bool iconMuted: !storesLoading && !hasStores && storesError === ""
-  readonly property string tooltip: Model.barTooltipFromStores(storePayloads)
-
-  readonly property bool opened: false
-  readonly property bool popoutSwitchClosing: false
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    if ("bar" in target) target.bar = root.bar
+    if ("settings" in target) target.settings = root.settings
+    if ("anchorItem" in target) target.anchorItem = button
+    if ("hostWidget" in target) target.hostWidget = root
+  }
 
   function refresh() {
-    refreshStores()
-    refreshStorePayloads()
+    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
   }
 
-  function togglePanel() {}
-  function open() {}
-  function close() {}
-  function closeForPopoutSwitch() {}
-
-  function refreshStores() {
-    if (!statusScript || storesProc.running) return
-    storesLoading = true
-    storesProc.command = ["bash", statusScript, "stores"]
-    storesProc.running = true
+  function togglePanel() {
+    if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
 
-  function refreshStorePayloads() {
-    if (!statusScript || !hasStores) return
-    payloadGen += 1
-    payloadIndex = 0
-    if (!storePayloadProc.running)
-      fetchNextStorePayload()
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+
+  function open() {
+    if (panelLoader.item && panelLoader.item.open) panelLoader.item.open()
   }
 
-  function fetchNextStorePayload() {
-    if (!statusScript || !hasStores || payloadIndex >= storeDefs.length) return
-    activePayloadGen = payloadGen
-    storePayloadProc.command = ["bash", statusScript, String(storeDefs[payloadIndex].key), "14"]
-    storePayloadProc.running = true
+  function close() {
+    if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
   }
 
-  function applyStores(raw) {
-    storesLoading = false
-    var parsed = Model.parseStoresList(raw)
-    if (parsed.ok) {
-      storeDefs = parsed.stores
-      storesError = ""
-      storePayloads = []
-      refreshStorePayloads()
-    } else {
-      storesError = parsed.error || "No stores"
-      storeDefs = []
-      storePayloads = []
-    }
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+
+  function closeForPopoutSwitch() {
+    if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
-  function applyStorePayload(raw) {
-    var parsed = Model.parseStorePayload(raw)
-    var next = storePayloads.slice()
-    next[payloadIndex] = parsed
-    if (payloadIndex + 1 >= storeDefs.length)
-      next = next.slice(0, storeDefs.length)
-    storePayloads = next
-  }
+  readonly property bool iconActive: panelLoader.item ? panelLoader.item.iconActive === true : false
+  readonly property bool iconError: panelLoader.item ? panelLoader.item.iconError === true : false
+  readonly property bool iconMuted: panelLoader.item ? panelLoader.item.iconMuted === true : false
+  readonly property string tooltip: panelLoader.item ? panelLoader.item.barTooltip : "Shopify"
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
   width: implicitWidth
   height: implicitHeight
 
-  Component.onCompleted: refreshStores()
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
 
-  Process {
-    id: storesProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var raw = String(text || "").trim()
-        if (!raw) {
-          root.storesLoading = false
-          root.storesError = "No stores"
-          return
-        }
-        root.applyStores(raw)
-      }
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("Panel.qml")
+    visible: false
+    onLoaded: {
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
     }
-    stderr: StdioCollector { waitForEnd: true }
-  }
-
-  Process {
-    id: storePayloadProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (root.activePayloadGen !== root.payloadGen) {
-          root.payloadIndex = 0
-          root.fetchNextStorePayload()
-          return
-        }
-        var raw = String(text || "").trim()
-        if (raw)
-          root.applyStorePayload(raw)
-        root.payloadIndex += 1
-        if (root.payloadIndex < root.storeDefs.length)
-          root.fetchNextStorePayload()
-      }
-    }
-    stderr: StdioCollector { waitForEnd: true }
-  }
-
-  Timer {
-    interval: root.pollIntervalMs
-    running: true
-    repeat: true
-    onTriggered: root.refreshStorePayloads()
-  }
-
-  IpcHandler {
-    target: "evo.shopify"
-    function refresh(): string { root.refresh(); return "ok" }
   }
 
   BarIconButton {
@@ -156,7 +75,7 @@ BarWidget {
 
     onPressed: function() {
       if (!root.bar) return
-      root.refresh()
+      root.togglePanel()
     }
   }
 }
