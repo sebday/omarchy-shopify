@@ -23,9 +23,10 @@ type model struct {
 	storeIdx   int
 	metric     string
 	focus      panel
-	pulsePhase float64
 	loading    bool
 	refreshing bool
+	demo       bool
+	liveSnap   Snapshot
 	err        string
 }
 
@@ -38,8 +39,6 @@ type refreshMsg struct {
 	snap Snapshot
 	err  error
 }
-
-type pulseMsg struct{}
 
 type pollMsg struct{}
 
@@ -56,7 +55,7 @@ func newModel(script string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadCacheCmd(m.script), pulseTick(), pollTick())
+	return tea.Batch(loadCacheCmd(m.script), pollTick())
 }
 
 func loadCacheCmd(script string) tea.Cmd {
@@ -73,12 +72,6 @@ func refreshCmd(script string) tea.Cmd {
 	}
 }
 
-func pulseTick() tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
-		return pulseMsg{}
-	})
-}
-
 func pollTick() tea.Cmd {
 	return tea.Tick(pollInterval, func(time.Time) tea.Msg {
 		return pollMsg{}
@@ -86,6 +79,13 @@ func pollTick() tea.Cmd {
 }
 
 func (m model) applySnap(snap Snapshot) model {
+	if m.demo {
+		return m
+	}
+	return m.setSnap(snap)
+}
+
+func (m model) setSnap(snap Snapshot) model {
 	if len(snap.Stores) > 0 {
 		m.stores = snap.Stores
 	}
@@ -121,6 +121,44 @@ func (m model) currentPayload() Payload {
 	return m.payloads[store.Key]
 }
 
+func (m model) toggleDemo() model {
+	if m.demo {
+		m.demo = false
+		if len(m.liveSnap.Stores) > 0 || len(m.liveSnap.Payloads) > 0 {
+			m = m.setSnap(m.liveSnap)
+		}
+		m.liveSnap = Snapshot{}
+		m.err = ""
+		return m
+	}
+	m.liveSnap = Snapshot{
+		Stores:   append([]Store(nil), m.stores...),
+		Payloads: copyPayloads(m.payloads),
+	}
+	m.demo = true
+	m.loading = false
+	m.err = ""
+	snap, err := loadSnapshot(m.script, "demo")
+	if err != nil {
+		m.demo = false
+		m.liveSnap = Snapshot{}
+		m.err = err.Error()
+		return m
+	}
+	return m.setSnap(snap)
+}
+
+func copyPayloads(src map[string]Payload) map[string]Payload {
+	if src == nil {
+		return map[string]Payload{}
+	}
+	dst := make(map[string]Payload, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 func (m model) twoCol() bool {
 	return m.width >= 120 && len(m.stores) >= 2
 }
@@ -133,6 +171,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case cacheMsg:
+		if m.demo {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.loading = false
@@ -144,6 +185,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshMsg:
 		m.refreshing = false
+		if m.demo {
+			return m, nil
+		}
 		if msg.err != nil {
 			if len(m.stores) == 0 {
 				m.err = msg.err.Error()
@@ -153,14 +197,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.applySnap(msg.snap)
 		return m, nil
 
-	case pulseMsg:
-		m.pulsePhase += 0.05
-		if m.pulsePhase >= 1 {
-			m.pulsePhase -= 1
-		}
-		return m, pulseTick()
-
 	case pollMsg:
+		if m.demo {
+			return m, pollTick()
+		}
 		if m.refreshing {
 			return m, pollTick()
 		}
@@ -178,11 +218,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc", "ctrl+c":
 		return m, tea.Quit
 	case "r":
+		if m.demo {
+			m = m.toggleDemo()
+		}
 		if m.refreshing {
 			return m, nil
 		}
 		m.refreshing = true
 		return m, refreshCmd(m.script)
+	case "d":
+		m = m.toggleDemo()
+		return m, nil
 	case "tab":
 		m.metric = nextMetric(m.currentPayload(), m.metric, 1)
 		return m, nil

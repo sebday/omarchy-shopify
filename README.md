@@ -73,7 +73,10 @@ Override the plugin root with `EVOSHOPIFY_ROOT` if `shopify-status` is not next 
 |---|---|
 | `q` / `esc` | Quit |
 | `r` | Refresh |
+| `d` | Toggle demo data from `demo.json` |
 | `[` `]` / Tab | Previous / next stat |
+
+Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints the same snapshot for the bar popup and TUI.
 
 ## IPC
 

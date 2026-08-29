@@ -18,13 +18,6 @@ func (m model) contentWidth() int {
 	return max(20, m.width)
 }
 
-func (m model) pulse(p panel) float64 {
-	if m.focus == p {
-		return m.pulsePhase
-	}
-	return 0
-}
-
 func (m model) active(p panel) bool {
 	return m.focus == p
 }
@@ -78,6 +71,9 @@ func (m model) renderStore(store Store, storeIdx, width, height int, focused boo
 	if title == "" {
 		title = store.Key
 	}
+	if m.demo {
+		title = "DEMO MODE"
+	}
 	meta := kpiHeroMeta(payload.TodayDetail)
 	innerW := max(8, width-4)
 	kpis := m.renderKPIs(payload, innerW, borderColor)
@@ -87,7 +83,6 @@ func (m model) renderStore(store Store, storeIdx, width, height int, focused boo
 	kpiPulse := 0.0
 	kpiActive := false
 	if focused {
-		kpiPulse = m.pulse(panelKPI)
 		kpiActive = m.active(panelKPI)
 	}
 	kpiBox := fieldsetPad(title, kpis, width, kpiH, kpiActive, kpiPulse, 1, 1, meta, hint("tab", "to switch"), 1, borderColor)
@@ -108,7 +103,6 @@ func (m model) renderStore(store Store, storeIdx, width, height int, focused boo
 	chartPulse := 0.0
 	chartActive := false
 	if focused {
-		chartPulse = m.pulse(panelChart)
 		chartActive = m.active(panelChart)
 	}
 	hover := chartHoverLabel(bars, def, payload.Currency())
@@ -119,7 +113,6 @@ func (m model) renderStore(store Store, storeIdx, width, height int, focused boo
 		chPulse := 0.0
 		chActive := false
 		if focused {
-			chPulse = m.pulse(panelChannels)
 			chActive = m.active(panelChannels)
 		}
 		chBody := m.renderChannels(payload, max(8, width-4), borderColor)

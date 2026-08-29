@@ -960,9 +960,21 @@ cmd_stores() {
     printf '[]\n'
 }
 
+cmd_demo() {
+    local path="${_bin_dir}/../demo.json"
+    if [[ ! -f "$path" ]]; then
+        printf '%s\n' "$EMPTY_SNAPSHOT"
+        return 1
+    fi
+    cat "$path"
+}
+
 case "${1:-}" in
     cache)
         cmd_cache
+        ;;
+    demo)
+        cmd_demo
         ;;
     refresh)
         cmd_refresh

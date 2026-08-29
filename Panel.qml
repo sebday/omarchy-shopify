@@ -32,6 +32,11 @@ Panel {
   property bool snapshotRefreshing: false
   property bool pendingRefresh: false
   property bool pollStarted: false
+  property bool demoMode: false
+  property string snapshotMode: "cache"
+
+  property var liveStoreDefs: []
+  property var liveStorePayloads: ({})
 
   readonly property var firstStoreData: storeDefs.length > 0
     ? (storePayloads[storeDefs[0].key] || null)
@@ -67,12 +72,31 @@ Panel {
     storesLoading = false
   }
 
+  function toggleDemo() {
+    if (demoMode) {
+      demoMode = false
+      if (liveStoreDefs.length > 0 || Object.keys(liveStorePayloads).length > 0) {
+        storeDefs = liveStoreDefs
+        storePayloads = liveStorePayloads
+      }
+      liveStoreDefs = []
+      liveStorePayloads = {}
+      return
+    }
+    liveStoreDefs = storeDefs.slice()
+    liveStorePayloads = Object.assign({}, storePayloads)
+    demoMode = true
+    runSnapshot("demo")
+  }
+
   function runSnapshot(mode) {
     if (!statusScript) return
+    if (mode === "refresh" && demoMode) return
     if (snapshotProc.running) {
       if (mode === "refresh") pendingRefresh = true
       return
     }
+    snapshotMode = mode
     snapshotRefreshing = mode === "refresh"
     if (snapshotRefreshing && !hasStores)
       storesLoading = true
@@ -85,6 +109,7 @@ Panel {
   }
 
   function refreshInBackground() {
+    if (demoMode) return
     runSnapshot("refresh")
   }
 
@@ -97,6 +122,8 @@ Panel {
   }
 
   function refresh() {
+    if (demoMode)
+      toggleDemo()
     loadCache()
   }
 
@@ -129,12 +156,13 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var raw = String(text || "").trim()
-        if (raw)
-          root.applySnapshot(raw)
-        else
-          root.storesLoading = false
+        var mode = root.snapshotMode
         root.snapshotRefreshing = false
-        if (root.pendingRefresh) {
+        if (raw && (mode === "demo" || !root.demoMode))
+          root.applySnapshot(raw)
+        else if (!raw)
+          root.storesLoading = false
+        if (root.pendingRefresh && !root.demoMode) {
           root.pendingRefresh = false
           root.refreshInBackground()
         }
@@ -177,6 +205,12 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(t) {
+        if (t === "d" || t === "D")
+          root.toggleDemo()
+        else if (t === "r" || t === "R")
+          root.refresh()
+      }
 
       Flickable {
         id: popupFlick
@@ -246,7 +280,7 @@ Panel {
 
                 PopupStoreCard {
                   width: parent.width
-                  title: String(modelData.title || modelData.key || "")
+                  title: root.demoMode ? "DEMO MODE" : String(modelData.title || modelData.key || "")
                   adminSlug: String(modelData.adminSlug || "")
                   iconPath: String(modelData.iconPath || "")
                   externalPayload: root.payloadForStoreKey(modelData.key)
