@@ -28,8 +28,10 @@ declare -gA REMOTE_KPI=()
 REMOTE_RAW_TODAY=""
 REMOTE_CURRENCY=""
 REMOTE_LATEST_DATE=""
+REMOTE_MTD=""
 REMOTE_HAS_SPEND=0
 REMOTE_ERROR=""
+EMPTY_KPI="0|0|0||||0|0|0|0"
 
 discover_stores_from_names() {
     local name key display
@@ -130,6 +132,10 @@ json_text() {
     jq -cn --arg text "$1" '{text: $text}'
 }
 
+payload_is_ok() {
+    jq -e '((.bars // []) | length) > 0 or ((.todayDetail.date // "") | length) > 0' <<<"$1" >/dev/null 2>&1
+}
+
 json_shopify() {
     jq -cn \
         --arg text "$1" \
@@ -138,9 +144,17 @@ json_shopify() {
         --arg symbol "$4" \
         --argjson orders "$5" \
         --arg cos "$6" \
-        --arg revenue "$7" \
+        --argjson revenue "$7" \
         --argjson todayDetail "$8" \
         --argjson period "$9" \
+        --argjson channels "${10}" \
+        --argjson orderBars "${11}" \
+        --argjson month "${12}" \
+        --argjson sessionBars "${13}" \
+        --argjson spendBars "${14}" \
+        --argjson cvrBars "${15}" \
+        --argjson aovBars "${16}" \
+        --argjson cosBars "${17}" \
         '{
             text: $text,
             label: $label,
@@ -150,7 +164,15 @@ json_shopify() {
             cos: $cos,
             revenue: $revenue,
             todayDetail: $todayDetail,
-            period: $period
+            period: $period,
+            channels: $channels,
+            orderBars: $orderBars,
+            month: $month,
+            sessionBars: $sessionBars,
+            spendBars: $spendBars,
+            cvrBars: $cvrBars,
+            aovBars: $aovBars,
+            cosBars: $cosBars
         }'
 }
 
@@ -167,27 +189,33 @@ site_sqlite_path() {
 }
 
 remote_fetch_store_data() {
-    local db=$1 today_s=$2 start_date=$3
-    local output line tag rest dt
+    local db=$1 today_s=$2 start_date=$3 month_start=$4
+    local output line tag rest dt attempt
 
     evo_valid_date "$today_s" || return 1
     evo_valid_date "$start_date" || return 1
+    evo_valid_date "$month_start" || return 1
 
-    REMOTE_KPI=()
-    REMOTE_RAW_TODAY=""
-    REMOTE_CURRENCY=""
-    REMOTE_LATEST_DATE=""
-    REMOTE_HAS_SPEND=0
-    REMOTE_ERROR=""
+    for attempt in 1 2 3; do
+        REMOTE_KPI=()
+        REMOTE_RAW_TODAY=""
+        REMOTE_CURRENCY=""
+        REMOTE_LATEST_DATE=""
+        REMOTE_MTD=""
+        REMOTE_HAS_SPEND=0
+        REMOTE_ERROR=""
 
-    output=$(evo_ssh_run "$DATA_SSH" bash -s -- \
-        "$(printf '%q' "$db")" \
-        "$(printf '%q' "$today_s")" \
-        "$(printf '%q' "$start_date")" <<'REMOTE'
+        if ! output=$(evo_ssh_run "$DATA_SSH" bash -s -- \
+            "$(printf '%q' "$db")" \
+            "$(printf '%q' "$today_s")" \
+            "$(printf '%q' "$start_date")" \
+            "$(printf '%q' "$month_start")" <<'REMOTE'
 set -euo pipefail
 db=$1
 today=$2
 start=$3
+month_start=$4
+SQLITE=(sqlite3 -readonly -cmd ".timeout 10000")
 
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "ERROR|sqlite3 not found on remote host"
@@ -199,62 +227,77 @@ if [[ ! -f "$db" ]]; then
 fi
 
 spend_col="NULL"
-if sqlite3 -readonly "$db" "PRAGMA table_info(fact_kpi_daily)" | cut -d'|' -f2 | grep -qx 'google_spend'; then
+if "${SQLITE[@]}" "$db" "PRAGMA table_info(fact_kpi_daily)" | cut -d'|' -f2 | grep -qx 'google_spend'; then
   spend_col="google_spend"
   echo "HAS_SPEND|1"
 else
   echo "HAS_SPEND|0"
 fi
 
-currency=$(sqlite3 -readonly "$db" "SELECT COALESCE(currency_code, '') FROM raw_shopify_orders_daily WHERE dt = '${today}';" 2>/dev/null || true)
+currency=$("${SQLITE[@]}" "$db" "SELECT COALESCE(currency_code, '') FROM raw_shopify_orders_daily WHERE dt = '${today}';" 2>/dev/null || true)
 echo "CURRENCY|${currency}"
 
-latest=$(sqlite3 -readonly "$db" "SELECT dt FROM fact_kpi_daily WHERE dt <= '${today}' AND (COALESCE(revenue, 0) > 0 OR COALESCE(orders, 0) > 0 OR COALESCE(sessions, 0) > 0) ORDER BY dt DESC LIMIT 1;" 2>/dev/null || true)
+latest=$("${SQLITE[@]}" "$db" "SELECT dt FROM fact_kpi_daily WHERE dt <= '${today}' AND (COALESCE(revenue, 0) > 0 OR COALESCE(orders, 0) > 0 OR COALESCE(sessions, 0) > 0) ORDER BY dt DESC LIMIT 1;" 2>/dev/null || true)
 echo "LATEST|${latest}"
 
-sqlite3 -readonly -separator '|' "$db" \
-  "SELECT dt, COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col} FROM fact_kpi_daily WHERE dt >= '${start}' AND dt <= '${today}';" \
-  | while IFS='|' read -r dt rev orders sessions spend; do
+mtd=$("${SQLITE[@]}" "$db" "SELECT COALESCE(SUM(revenue), 0) FROM fact_kpi_daily WHERE dt >= '${month_start}' AND dt <= '${today}';" 2>/dev/null || true)
+echo "MTD|${mtd}"
+
+"${SQLITE[@]}" -separator '|' "$db" \
+  "SELECT dt, COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col}, cvr, COALESCE(paid_revenue,0), COALESCE(organic_revenue,0), COALESCE(direct_revenue,0), COALESCE(email_revenue,0) FROM fact_kpi_daily WHERE dt >= '${start}' AND dt <= '${today}';" \
+  | while IFS='|' read -r dt rev orders sessions spend cvr paid org direct email; do
       [[ -n "$dt" ]] || continue
-      printf 'KPI|%s|%s|%s|%s|%s\n' \
-        "$dt" "${rev:-0}" "${orders:-0}" "${sessions:-0}" "${spend:-}"
+      printf 'KPI|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        "$dt" "${rev:-0}" "${orders:-0}" "${sessions:-0}" "${spend:-}" "${cvr:-}" \
+        "${paid:-0}" "${org:-0}" "${direct:-0}" "${email:-0}"
     done
 
-raw=$(sqlite3 -readonly -separator '|' "$db" \
+raw=$("${SQLITE[@]}" -separator '|' "$db" \
   "SELECT COALESCE(gross_revenue, 0), COALESCE(order_count, 0), COALESCE(shopify_sessions, 0) FROM raw_shopify_orders_daily WHERE dt = '${today}';" 2>/dev/null \
   || printf '0|0|0')
 echo "RAW|${today}|${raw}"
 REMOTE
-    ) || return 1
+        ); then
+            REMOTE_ERROR="ssh query failed"
+            (( attempt < 3 )) && sleep 1
+            continue
+        fi
 
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        tag="${line%%|*}"
-        rest="${line#*|}"
-        case "$tag" in
-            ERROR)
-                REMOTE_ERROR="$rest"
-                echo "shopify-status: remote: ${rest}" >&2
-                return 1
-                ;;
-            HAS_SPEND)
-                [[ "$rest" == "1" ]] && REMOTE_HAS_SPEND=1
-                ;;
-            CURRENCY)
-                REMOTE_CURRENCY="$rest"
-                ;;
-            LATEST)
-                REMOTE_LATEST_DATE="$rest"
-                ;;
-            KPI)
-                dt="${rest%%|*}"
-                REMOTE_KPI["$dt"]="${rest#*|}"
-                ;;
-            RAW)
-                REMOTE_RAW_TODAY="${rest#*|}"
-                ;;
-        esac
-    done <<< "$output"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            tag="${line%%|*}"
+            rest="${line#*|}"
+            case "$tag" in
+                ERROR)
+                    REMOTE_ERROR="$rest"
+                    echo "shopify-status: remote: ${rest}" >&2
+                    return 1
+                    ;;
+                HAS_SPEND)
+                    [[ "$rest" == "1" ]] && REMOTE_HAS_SPEND=1
+                    ;;
+                CURRENCY)
+                    REMOTE_CURRENCY="$rest"
+                    ;;
+                LATEST)
+                    REMOTE_LATEST_DATE="$rest"
+                    ;;
+                MTD)
+                    REMOTE_MTD="$rest"
+                    ;;
+                KPI)
+                    dt="${rest%%|*}"
+                    REMOTE_KPI["$dt"]="${rest#*|}"
+                    ;;
+                RAW)
+                    REMOTE_RAW_TODAY="${rest#*|}"
+                    ;;
+            esac
+        done <<< "$output"
+        return 0
+    done
+
+    return 1
 }
 
 has_google_spend_column() {
@@ -269,12 +312,23 @@ has_google_spend_column() {
 get_day_kpi() {
     local db=$1 dt=$2 spend_col=$3
     if [[ "$DATA_MODE" == remote ]]; then
-        printf '%s\n' "${REMOTE_KPI[$dt]:-0|0|0|}"
+        printf '%s\n' "${REMOTE_KPI[$dt]:-$EMPTY_KPI}"
         return
     fi
     sqlite3 -readonly -separator '|' "$db" \
-        "SELECT COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col} FROM fact_kpi_daily WHERE dt = '${dt}';" 2>/dev/null \
-        || printf '0|0|0|'
+        "SELECT COALESCE(revenue,0), COALESCE(orders,0), COALESCE(sessions,0), ${spend_col}, cvr, COALESCE(paid_revenue,0), COALESCE(organic_revenue,0), COALESCE(direct_revenue,0), COALESCE(email_revenue,0) FROM fact_kpi_daily WHERE dt = '${dt}';" 2>/dev/null \
+        || printf '%s\n' "$EMPTY_KPI"
+}
+
+get_month_mtd_revenue() {
+    local db=$1 month_start=$2 today=$3
+    if [[ "$DATA_MODE" == remote ]]; then
+        printf '%s' "${REMOTE_MTD:-0}"
+        return
+    fi
+    sqlite3 -readonly "$db" \
+        "SELECT COALESCE(SUM(revenue), 0) FROM fact_kpi_daily WHERE dt >= '${month_start}' AND dt <= '${today}';" 2>/dev/null \
+        || printf '0'
 }
 
 kpi_day_has_data() {
@@ -483,6 +537,7 @@ cmd_cache() {
         [[ "$key" == "snapshot" || "$key" == "all" || -z "$key" ]] && continue
         one=$(cat "$f")
         [[ -n "$one" ]] || continue
+        payload_is_ok "$one" || continue
         stores=$(jq -c --arg key "$key" --arg title "$key" --arg sqliteKey "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" \
             '. + [{key: $key, title: $title, adminSlug: "", sqliteKey: $sqliteKey}]' <<<"$stores")
         payloads_json=$(jq -c --arg k "$key" --argjson v "$one" '. + {($k): $v}' <<<"$payloads_json")
@@ -560,11 +615,16 @@ cmd_refresh() {
 
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
+        local prev=""
         if ! one=$(build_one_store "$key" "$SNAPSHOT_DAYS"); then
             [[ -n "$one" ]] || one=$(json_text "Error: Store ${key} not found")
+            if prev=$(evo_bar_cache_read_any "$(store_cache_key "$key" "$SNAPSHOT_DAYS")" 2>/dev/null) && payload_is_ok "$prev"; then
+                one="$prev"
+            fi
+        else
+            printf '%s\n' "$one" | evo_bar_cache_write "$(store_cache_key "$key" "$SNAPSHOT_DAYS")"
         fi
         payloads_json=$(jq -c --arg k "$key" --argjson v "$one" '. + {($k): $v}' <<<"$payloads_json")
-        printf '%s\n' "$one" | evo_bar_cache_write "$(store_cache_key "$key" "$SNAPSHOT_DAYS")"
     done < <(jq -r '.[].key // empty' <<<"$stores")
 
     if [[ "$payloads_json" == "{}" && "$stores" == "[]" ]]; then
@@ -596,14 +656,26 @@ build_one_store() {
 
     evo_bar_load_heatmap_colors
 
-    local today_s start_date i day_iso db_path spend_col
-    local rev orders sessions spend cos sym today_sales_val cos_str
-    local period_rev
+    local today_s start_date month_start i day_iso db_path spend_col
+    local rev orders sessions spend cvr paid_rev org_rev dir_rev email_rev
+    local cos sym today_sales_val cos_str
+    local period_rev period_orders period_sessions period_spend
+    local period_paid period_organic period_direct period_email
+    local prev_period_rev fetch_start
     local today_detail_json period_json sparkline_json
-    local -a chart_days=()
+    local order_bars_json session_bars_json spend_bars_json
+    local cvr_bars_json aov_bars_json cos_bars_json channels_json month_json
+    local day_of_month days_in_month mtd_revenue forecast_revenue
+    local -a chart_days=() chart_order_days=() chart_session_days=()
+    local -a chart_spend_days=() chart_cvr_days=() chart_aov_days=() chart_cos_days=()
 
     today_s=$(TZ="$tz_name" date +%Y-%m-%d)
     start_date=$(TZ="$tz_name" date -d "${today_s} - ${days_back} days" +%Y-%m-%d)
+    month_start=$(TZ="$tz_name" date -d "${today_s}" +%Y-%m-01)
+    fetch_start="$start_date"
+    if (( days >= 30 )); then
+        fetch_start=$(TZ="$tz_name" date -d "${today_s} - 59 days" +%Y-%m-%d)
+    fi
 
     if ! data_path_ready; then
         json_text "Shopify: set shopify.dataPath in shell.json"
@@ -626,9 +698,11 @@ build_one_store() {
     db_path=$(site_sqlite_path "$STORE_SITE_KEY")
 
     if [[ "$DATA_MODE" == remote ]]; then
-        if ! remote_fetch_store_data "$db_path" "$today_s" "$start_date"; then
+        if ! remote_fetch_store_data "$db_path" "$today_s" "$fetch_start" "$month_start"; then
             if [[ "$REMOTE_ERROR" == "database not found" ]]; then
                 json_text "${STORE_DISPLAY}: no db (${db_path})"
+            elif [[ -n "$REMOTE_ERROR" ]]; then
+                json_text "${STORE_DISPLAY}: remote db error (${REMOTE_ERROR})"
             else
                 json_text "${STORE_DISPLAY}: remote db error"
             fi
@@ -646,20 +720,78 @@ build_one_store() {
     fi
 
     period_rev=0
+    period_orders=0
+    period_sessions=0
+    period_spend=0
+    period_paid=0
+    period_organic=0
+    period_direct=0
+    period_email=0
 
     for i in $(seq "$days_back" -1 0); do
         day_iso=$(TZ="$tz_name" date -d "${today_s} - ${i} days" +%Y-%m-%d)
-        IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$day_iso" "$spend_col")"
+        IFS='|' read -r rev orders sessions spend cvr paid_rev org_rev dir_rev email_rev <<< "$(get_day_kpi "$db_path" "$day_iso" "$spend_col")"
         rev=${rev:-0}
         orders=${orders:-0}
+        sessions=${sessions:-0}
         chart_days+=("${day_iso}|${rev}|${orders}")
+        chart_order_days+=("${day_iso}|${orders}|0")
+        chart_session_days+=("${day_iso}|${sessions}|0")
+        chart_spend_days+=("${day_iso}|$(
+            if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
+                awk -v s="$spend" 'BEGIN { printf "%.2f", s + 0 }'
+            else
+                printf '0'
+            fi
+        )|0")
+        chart_cvr_days+=("${day_iso}|$(
+            if [[ -n "$cvr" && "$cvr" != "NULL" && "$cvr" != "" ]]; then
+                awk -v v="$cvr" 'BEGIN { printf "%.6f", v + 0 }'
+            else
+                printf '0'
+            fi
+        )|0")
+        chart_aov_days+=("${day_iso}|$(
+            awk -v r="$rev" -v o="$orders" 'BEGIN {
+                if (o + 0 > 0) printf "%.2f", r / o
+                else print "0"
+            }'
+        )|0")
+        chart_cos_days+=("${day_iso}|$(
+            if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
+                awk -v s="$spend" -v r="$rev" 'BEGIN {
+                    if (r + 0 > 0) printf "%.6f", s / r
+                    else print "0"
+                }'
+            else
+                printf '0'
+            fi
+        )|0")
         period_rev=$(awk -v a="$period_rev" -v b="$rev" 'BEGIN { printf "%.2f", a + b }')
+        period_orders=$((period_orders + $(awk -v o="$orders" 'BEGIN { print int(o + 0) }')))
+        period_sessions=$((period_sessions + $(awk -v s="$sessions" 'BEGIN { print int(s + 0) }')))
+        period_paid=$(awk -v a="$period_paid" -v b="${paid_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
+        period_organic=$(awk -v a="$period_organic" -v b="${org_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
+        period_direct=$(awk -v a="$period_direct" -v b="${dir_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
+        period_email=$(awk -v a="$period_email" -v b="${email_rev:-0}" 'BEGIN { printf "%.2f", a + b }')
+        if [[ -n "$spend" && "$spend" != "NULL" && "$spend" != "" ]]; then
+            period_spend=$(awk -v a="$period_spend" -v b="$spend" 'BEGIN { printf "%.2f", a + b }')
+        fi
     done
+
+    prev_period_rev=0
+    if (( days >= 30 )); then
+        for i in $(seq 59 -1 30); do
+            day_iso=$(TZ="$tz_name" date -d "${today_s} - ${i} days" +%Y-%m-%d)
+            IFS='|' read -r rev orders sessions spend cvr paid_rev org_rev dir_rev email_rev <<< "$(get_day_kpi "$db_path" "$day_iso" "$spend_col")"
+            prev_period_rev=$(awk -v a="$prev_period_rev" -v b="${rev:-0}" 'BEGIN { printf "%.2f", a + b }')
+        done
+    fi
 
     sym=$(currency_symbol "$(get_currency_code "$db_path" "$today_s")")
 
     local kpi_date="$today_s"
-    IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$today_s" "$spend_col")"
+    IFS='|' read -r rev orders sessions spend cvr paid_rev org_rev dir_rev email_rev <<< "$(get_day_kpi "$db_path" "$today_s" "$spend_col")"
     rev=${rev:-0}
     orders=${orders:-0}
     sessions=${sessions:-0}
@@ -672,12 +804,13 @@ build_one_store() {
             orders="$raw_orders"
             sessions="$raw_sessions"
             spend=""
+            cvr=""
             kpi_date="$today_s"
         else
             latest_date="$(get_latest_kpi_date "$db_path" "$today_s")"
             if [[ -n "$latest_date" ]]; then
                 kpi_date="$latest_date"
-                IFS='|' read -r rev orders sessions spend <<< "$(get_day_kpi "$db_path" "$kpi_date" "$spend_col")"
+                IFS='|' read -r rev orders sessions spend cvr paid_rev org_rev dir_rev email_rev <<< "$(get_day_kpi "$db_path" "$kpi_date" "$spend_col")"
                 rev=${rev:-0}
                 orders=${orders:-0}
                 sessions=${sessions:-0}
@@ -693,6 +826,12 @@ build_one_store() {
     fi
 
     sparkline_json=$(build_sparkline_json "${chart_days[@]}")
+    order_bars_json=$(build_sparkline_json "${chart_order_days[@]}")
+    session_bars_json=$(build_sparkline_json "${chart_session_days[@]}")
+    spend_bars_json=$(build_sparkline_json "${chart_spend_days[@]}")
+    cvr_bars_json=$(build_sparkline_json "${chart_cvr_days[@]}")
+    aov_bars_json=$(build_sparkline_json "${chart_aov_days[@]}")
+    cos_bars_json=$(build_sparkline_json "${chart_cos_days[@]}")
     today_sales_val=$(format_int_commas "$(awk -v r="$rev" 'BEGIN { print int(r + 0) }')")
 
     if [[ -n "$cos" ]]; then
@@ -711,25 +850,79 @@ build_one_store() {
         --arg calendarDate "$today_s" \
         --argjson revenue "$revenue_n" \
         --argjson orders "$orders_n" \
+        --argjson sessions "$(awk -v s="$sessions" 'BEGIN { print int(s + 0) }')" \
         --arg cos "$cos_str" \
+        --argjson spend "$(awk -v s="${spend:-}" 'BEGIN {
+            if (s == "" || s == "NULL") print "null"
+            else printf "%.2f", s + 0
+        }')" \
+        --argjson cvr "$(awk -v v="${cvr:-}" 'BEGIN {
+            if (v == "" || v == "NULL") print "null"
+            else printf "%.6f", v + 0
+        }')" \
         '{
             date: $date,
             calendarDate: $calendarDate,
             revenue: $revenue,
             orders: $orders,
-            cos: $cos
+            sessions: $sessions,
+            cos: $cos,
+            spend: $spend,
+            cvr: $cvr
         }')
 
     period_json=$(jq -cn \
         --argjson days "$days" \
         --argjson revenue "$(awk -v r="$period_rev" 'BEGIN { printf "%.2f", r + 0 }')" \
+        --argjson prevRevenue "$(awk -v r="$prev_period_rev" 'BEGIN { printf "%.2f", r + 0 }')" \
+        --argjson orders "$period_orders" \
+        --argjson sessions "$period_sessions" \
+        --argjson spend "$(awk -v s="$period_spend" 'BEGIN {
+            if (s + 0 <= 0) print "null"
+            else printf "%.2f", s + 0
+        }')" \
         '{
             days: $days,
-            revenue: $revenue
+            revenue: $revenue,
+            prevRevenue: $prevRevenue,
+            orders: $orders,
+            sessions: $sessions,
+            spend: $spend
+        }')
+
+    channels_json=$(jq -cn \
+        --argjson paid "$(awk -v v="$period_paid" 'BEGIN { printf "%.2f", v + 0 }')" \
+        --argjson organic "$(awk -v v="$period_organic" 'BEGIN { printf "%.2f", v + 0 }')" \
+        --argjson direct "$(awk -v v="$period_direct" 'BEGIN { printf "%.2f", v + 0 }')" \
+        --argjson email "$(awk -v v="$period_email" 'BEGIN { printf "%.2f", v + 0 }')" \
+        '{paid: $paid, organic: $organic, direct: $direct, email: $email}')
+
+    day_of_month=$(TZ="$tz_name" date -d "${today_s}" +%d)
+    days_in_month=$(TZ="$tz_name" date -d "${month_start} +1 month -1 day" +%d)
+    mtd_revenue=$(get_month_mtd_revenue "$db_path" "$month_start" "$today_s")
+    mtd_revenue=${mtd_revenue:-0}
+    forecast_revenue=$(awk -v mtd="$mtd_revenue" -v day="$day_of_month" -v dim="$days_in_month" 'BEGIN {
+        d = day + 0
+        if (d <= 0) { print "0"; exit }
+        printf "%.2f", (mtd + 0) / d * (dim + 0)
+    }')
+
+    month_json=$(jq -cn \
+        --argjson mtdRevenue "$(awk -v r="$mtd_revenue" 'BEGIN { printf "%.2f", r + 0 }')" \
+        --argjson forecastRevenue "$forecast_revenue" \
+        --argjson day "$day_of_month" \
+        --argjson daysInMonth "$days_in_month" \
+        '{
+            mtdRevenue: $mtdRevenue,
+            forecastRevenue: $forecastRevenue,
+            day: $day,
+            daysInMonth: $daysInMonth
         }')
 
     output=$(json_shopify "$label_text" "$label_text" "$sparkline_json" "$sym" \
-        "$orders_n" "$cos_str" "$revenue_n" "$today_detail_json" "$period_json")
+        "$orders_n" "$cos_str" "$revenue_n" "$today_detail_json" "$period_json" \
+        "$channels_json" "$order_bars_json" "$month_json" \
+        "$session_bars_json" "$spend_bars_json" "$cvr_bars_json" "$aov_bars_json" "$cos_bars_json")
     printf '%s\n' "$output"
 }
 
@@ -746,7 +939,7 @@ main() {
     fi
     cache_key="$(store_cache_key "${store_prefix:-all}" "$days")"
 
-    if cached=$(evo_bar_cache_read_any "$cache_key" 2>/dev/null); then
+    if cached=$(evo_bar_cache_read_any "$cache_key" 2>/dev/null) && payload_is_ok "$cached"; then
         printf '%s\n' "$cached"
         return 0
     fi

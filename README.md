@@ -1,17 +1,13 @@
 # Omarchy Shopify Plugin
 
-Bar widget for Shopify store revenue: today's KPIs and a sparkline for every store in the data directory.
+Bar widget for Shopify store revenue: today's KPIs and a sparkline for every store in the data source.
 
 ## Install
-
-A plugin is a git repo with a `manifest.json` at its root. Adding one clones it into `~/.config/omarchy/plugins/evo.shopify/`.
 
 ```bash
 omarchy plugin add https://github.com/sebday/omarchy-plugin-shopify.git
 omarchy plugin enable evo.shopify
 ```
-
-A local path works the same way.
 
 Plugins run as unsandboxed code inside `omarchy-shell`. Review the files before enabling.
 
@@ -20,8 +16,6 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Review the files before 
 - `sqlite3` and `jq` on `PATH`
 - `ssh` on `PATH` when `dataPath` is remote
 - ecommerce-data KPI sqlite dumps (one `*.sqlite` per store)
-
-Add a `shopify` block to `~/.config/omarchy/shell.json`:
 
 ```json
 "shopify": {
@@ -63,6 +57,23 @@ The bar icon follows theme colours:
 | No stores | Dimmed |
 
 Hover shows today's revenue and CoS for each store.
+
+## Dashboard
+
+Terminal dashboard with the full per-store KPIs, 30-day chart, and channel mix. Same `shopify` config as the bar. Left-click on the bar still opens the compact popup.
+
+```bash
+go build -o ~/.local/bin/evoshopify ./cmd/evoshopify
+evoshopify
+```
+
+Override the plugin root with `EVOSHOPIFY_ROOT` if `shopify-status` is not next to the binary or in `~/.config/omarchy/plugins/evo.shopify`.
+
+| Key | Action |
+|---|---|
+| `q` / `esc` | Quit |
+| `r` | Refresh |
+| `[` `]` / Tab | Previous / next stat |
 
 ## IPC
 

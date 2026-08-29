@@ -1,2 +1,4 @@
 *.qmlc
 *.jsc
+/evoshopify
+/.build/
