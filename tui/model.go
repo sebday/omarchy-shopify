@@ -232,7 +232,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.metric = nextMetric(m.currentPayload(), m.metric, 1)
 		return m, nil
-	case "]", "n":
+	case "n":
 		if len(m.stores) > 0 {
 			m.storeIdx = (m.storeIdx + 1) % len(m.stores)
 		}
@@ -240,7 +240,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.metric = nextMetric(m.currentPayload(), m.metric, -1)
 		return m, nil
-	case "[", "p":
+	case "p":
 		if len(m.stores) > 0 {
 			m.storeIdx = (m.storeIdx - 1 + len(m.stores)) % len(m.stores)
 		}

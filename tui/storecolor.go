@@ -4,10 +4,10 @@ import "strings"
 
 var storeBorderColors = map[string]string{
 	"DIY": "6", // cyan
-	"TGS": "5", // magenta
+	"TGS": "10", // bright green
 }
 
-var storeBorderFallback = []string{"6", "5", "2", "3", "4"}
+var storeBorderFallback = []string{"6", "10", "4", "3", "5"}
 
 func storeBorderColor(key string, index int) string {
 	if c, ok := storeBorderColors[strings.ToUpper(strings.TrimSpace(key))]; ok {

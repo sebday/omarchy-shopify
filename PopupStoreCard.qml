@@ -127,25 +127,50 @@ Item {
     BorderSurface {
       width: parent.width
       visible: root.revenueBars.length > 0
-      implicitHeight: chart.height + Style.spacing.lg * 2
+      implicitHeight: chartColumn.implicitHeight + Style.spacing.lg + Style.spacing.xs
       color: Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, 1)
       radius: Style.cornerRadius
       clip: true
 
-      RevenueBarChart {
-        id: chart
+      Column {
+        id: chartColumn
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.margins: Style.spacing.lg
-        height: 72
-        bars: root.revenueBars
-        currency: root.currency
-        foreground: root.foreground
-        accent: root.accent
-        background: root.surface
-        fontFamily: root.fontFamily
+        anchors.top: parent.top
+        anchors.leftMargin: Style.spacing.lg
+        anchors.rightMargin: Style.spacing.lg
+        anchors.topMargin: Style.spacing.lg
+        anchors.bottomMargin: Style.spacing.xs
+        spacing: 0
+
+        Text {
+          width: parent.width
+          visible: chart.hasTooltip
+          text: chart.tooltipLabel
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
+          elide: Text.ElideRight
+        }
+
+        Item {
+          width: parent.width
+          height: Style.font.caption
+        }
+
+        RevenueBarChart {
+          id: chart
+          width: parent.width
+          height: implicitHeight
+          bars: root.revenueBars
+          currency: root.currency
+          foreground: root.foreground
+          accent: root.accent
+          background: root.surface
+          fontFamily: root.fontFamily
+        }
       }
     }
   }

@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	colAccent  = lipgloss.Color("5")  // magenta
+	colAccent  = lipgloss.Color("10") // bright green
 	colGood    = lipgloss.Color("2")  // green
 	colMuted   = lipgloss.Color("8")  // bright black
 	colText    = lipgloss.Color("7")  // white

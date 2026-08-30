@@ -1,5 +1,9 @@
 # Omarchy Shopify Plugin
 
+![evoshopify TUI dashboard](preview.png)
+
+![Bar popup](preview2.png)
+
 Bar widget for Shopify store revenue: today's KPIs and a sparkline for every store in the data source.
 
 ## Install
@@ -48,19 +52,14 @@ Stores are auto-discovered from `*.sqlite` files in `dataPath`. To set titles an
 
 Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. Each card uses the store favicon when `{sqliteKey}.favicon.png` is available locally (or next to the sqlite files). The bar reads a local cache on startup (no SSH) and refreshes it in the background every 5 minutes after the popup is first opened.
 
-The bar icon follows theme colours:
-
 | State | Appearance |
 |---|---|
 | Revenue today | Accent |
 | Store or config error | Urgent |
 | No stores | Dimmed |
 
-Hover shows today's revenue and CoS for each store.
 
 ## Dashboard
-
-Terminal dashboard with the full per-store KPIs, 30-day chart, and channel mix. Same `shopify` config as the bar. Left-click on the bar still opens the compact popup.
 
 ```bash
 go build -o ~/.local/bin/evoshopify ./cmd/evoshopify
@@ -74,7 +73,7 @@ Override the plugin root with `EVOSHOPIFY_ROOT` if `shopify-status` is not next 
 | `q` / `esc` | Quit |
 | `r` | Refresh |
 | `d` | Toggle demo data from `demo.json` |
-| `[` `]` / Tab | Previous / next stat |
+| Tab | Previous / next stat |
 
 Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints the same snapshot for the bar popup and TUI.
 

@@ -22,7 +22,7 @@ func TestFieldsetLegendNotch(t *testing.T) {
 }
 
 func TestFieldsetInlineBottomLegend(t *testing.T) {
-	got := fieldsetPad("SHOPIFY", "DIY  OTHER", 48, 5, true, 0.2, 0, 1, "", "q quit", 1, "5")
+	got := fieldsetPad("SHOPIFY", "DIY  OTHER", 48, 5, true, 0.2, 0, 1, "", "q quit", 1, "10")
 	if !strings.Contains(got, "SHOPIFY") {
 		t.Fatalf("want top legend, got %q", got)
 	}

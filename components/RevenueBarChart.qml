@@ -41,7 +41,9 @@ Item {
   }
 
   readonly property int padInset: 6
-  readonly property int plotTopInset: padInset
+
+  implicitHeight: 56
+  height: implicitHeight
 
   readonly property real plotWidth: Math.max(0, width - padInset * 2)
 
@@ -115,36 +117,12 @@ Item {
     return n + " orders"
   }
 
-  Rectangle {
-    visible: root.hasTooltip
-    anchors.horizontalCenter: parent.horizontalCenter
-    anchors.top: parent.top
-    z: 2
-    implicitWidth: tooltipText.implicitWidth + Style.spacing.lg * 2
-    implicitHeight: tooltipText.implicitHeight + Style.spacing.lg
-    radius: Style.cornerRadius
-    color: root.background
-
-    Text {
-      id: tooltipText
-      anchors.centerIn: parent
-      text: root.tooltipLabel
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-  }
-
   Item {
     id: plotArea
-    anchors.top: parent.top
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
+    anchors.fill: parent
+    anchors.topMargin: padInset
     anchors.leftMargin: padInset
     anchors.rightMargin: padInset
-    anchors.bottomMargin: padInset
-    anchors.topMargin: root.plotTopInset
 
     Repeater {
       model: 3
