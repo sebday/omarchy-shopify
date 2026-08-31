@@ -31,6 +31,7 @@ Panel {
   property string storesError: ""
   property bool snapshotRefreshing: false
   property bool pendingRefresh: false
+  property bool pendingDemo: false
   property bool pollStarted: false
   property bool demoMode: false
   property string snapshotMode: "cache"
@@ -55,6 +56,7 @@ Panel {
 
   function applySnapshot(raw) {
     var snap = Model.parseSnapshot(raw)
+    var replace = snapshotMode === "demo"
     if (snap.stores.length > 0) {
       storeDefs = snap.stores
       storesError = ""
@@ -62,19 +64,24 @@ Panel {
       storesError = "No stores"
     }
 
-    var next = Object.assign({}, storePayloads)
-    var src = snap.payloads || {}
-    for (var key in src) {
-      if (!Object.prototype.hasOwnProperty.call(src, key)) continue
-      next[key] = src[key]
+    if (replace) {
+      storePayloads = snap.payloads || {}
+    } else {
+      var next = Object.assign({}, storePayloads)
+      var src = snap.payloads || {}
+      for (var key in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, key)) continue
+        next[key] = src[key]
+      }
+      storePayloads = next
     }
-    storePayloads = next
     storesLoading = false
   }
 
   function toggleDemo() {
     if (demoMode) {
       demoMode = false
+      pendingDemo = false
       if (liveStoreDefs.length > 0 || Object.keys(liveStorePayloads).length > 0) {
         storeDefs = liveStoreDefs
         storePayloads = liveStorePayloads
@@ -86,6 +93,7 @@ Panel {
     liveStoreDefs = storeDefs.slice()
     liveStorePayloads = Object.assign({}, storePayloads)
     demoMode = true
+    pendingRefresh = false
     runSnapshot("demo")
   }
 
@@ -93,12 +101,13 @@ Panel {
     if (!statusScript) return
     if (mode === "refresh" && demoMode) return
     if (snapshotProc.running) {
-      if (mode === "refresh") pendingRefresh = true
+      if (mode === "demo") pendingDemo = true
+      else if (mode === "refresh") pendingRefresh = true
       return
     }
     snapshotMode = mode
     snapshotRefreshing = mode === "refresh"
-    if (snapshotRefreshing && !hasStores)
+    if ((snapshotRefreshing || mode === "demo") && !hasStores)
       storesLoading = true
     snapshotProc.command = ["bash", statusScript, mode]
     snapshotProc.running = true
@@ -124,7 +133,7 @@ Panel {
   function refresh() {
     if (demoMode)
       toggleDemo()
-    loadCache()
+    refreshInBackground()
   }
 
   function open() {
@@ -143,7 +152,10 @@ Panel {
     return false
   }
 
-  Component.onCompleted: loadCache()
+  Component.onCompleted: {
+    loadCache()
+    startPolling()
+  }
 
   onOpenedChanged: {
     if (opened)
@@ -162,6 +174,11 @@ Panel {
           root.applySnapshot(raw)
         else if (!raw)
           root.storesLoading = false
+        if (root.pendingDemo && root.demoMode) {
+          root.pendingDemo = false
+          root.runSnapshot("demo")
+          return
+        }
         if (root.pendingRefresh && !root.demoMode) {
           root.pendingRefresh = false
           root.refreshInBackground()

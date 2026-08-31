@@ -15,7 +15,7 @@ source "${_bin_dir}/common.sh"
 merged_config() { cat "${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}" 2>/dev/null || echo '{}'; }
 
 DEFAULT_TZ="Europe/London"
-DEFAULT_DATA_PATH="zotac:~/projects/data-store"
+DEFAULT_DATA_PATH="zotac:~/projects/ecommerce-data/data"
 DATA_PATH=""
 DATA_MODE=""       # local | remote
 DATA_LOCAL=""      # absolute local data dir
@@ -480,6 +480,7 @@ data_path_ready() {
 
 EMPTY_SNAPSHOT='{"stores":[],"payloads":{}}'
 SNAPSHOT_DAYS=30
+CACHE_TTL_SEC=300
 
 snapshot_with_icons() {
     local snap=$1
@@ -520,7 +521,7 @@ cache_favicons() {
 
 cmd_cache() {
     local cached slug prefix f base key stores payloads_json one snapshot
-    if cached=$(evo_bar_cache_read_any "$(snapshot_cache_key)" 2>/dev/null); then
+    if cached=$(evo_bar_cache_read "$(snapshot_cache_key)" "$CACHE_TTL_SEC" 2>/dev/null); then
         snapshot_with_icons "$cached"
         return 0
     fi
@@ -962,11 +963,18 @@ cmd_stores() {
 
 cmd_demo() {
     local path="${_bin_dir}/../demo.json"
+    local icon
+    path=$(cd "${_bin_dir}/.." && pwd)/demo.json
+    icon=$(cd "${_bin_dir}/.." && pwd)/assets/shopify-logo.svg
     if [[ ! -f "$path" ]]; then
         printf '%s\n' "$EMPTY_SNAPSHOT"
         return 1
     fi
-    cat "$path"
+    if [[ ! -f "$icon" ]]; then
+        cat "$path"
+        return 0
+    fi
+    jq -c --arg icon "$icon" '.stores |= map(.iconPath = $icon)' "$path"
 }
 
 case "${1:-}" in
