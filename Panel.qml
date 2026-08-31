@@ -23,7 +23,8 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property var palette: Model.chartPalette(accent, urgent)
 
-  readonly property int pollIntervalMs: 300000
+  property int pollIntervalMinutes: 5
+  readonly property int pollIntervalMs: Math.max(60000, pollIntervalMinutes * 60 * 1000)
 
   property var storeDefs: []
   property var storePayloads: ({})
@@ -35,6 +36,7 @@ Panel {
   property bool pollStarted: false
   property bool demoMode: false
   property string snapshotMode: "cache"
+  property string lastRefreshedAt: ""
 
   property var liveStoreDefs: []
   property var liveStorePayloads: ({})
@@ -56,7 +58,7 @@ Panel {
 
   function applySnapshot(raw) {
     var snap = Model.parseSnapshot(raw)
-    var replace = snapshotMode === "demo"
+    var replace = snapshotMode === "demo" || snapshotMode === "refresh"
     if (snap.stores.length > 0) {
       storeDefs = snap.stores
       storesError = ""
@@ -76,6 +78,8 @@ Panel {
       storePayloads = next
     }
     storesLoading = false
+    if (snapshotMode === "refresh" && snap.stores.length > 0)
+      lastRefreshedAt = Qt.formatDateTime(new Date(), "hh:mm")
   }
 
   function toggleDemo() {
@@ -126,8 +130,18 @@ Panel {
     if (!pollStarted) {
       pollStarted = true
       refreshInBackground()
-      pollTimer.running = true
     }
+    pollTimer.running = true
+  }
+
+  function loadShellConfig() {
+    if (!statusScript) return
+    shellConfigProc.command = [
+      "bash",
+      "-c",
+      "jq -r '(.shopify.pollIntervalMinutes // 5)' \"${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}\" 2>/dev/null || echo 5",
+    ]
+    shellConfigProc.running = true
   }
 
   function refresh() {
@@ -153,13 +167,28 @@ Panel {
   }
 
   Component.onCompleted: {
+    loadShellConfig()
     loadCache()
     startPolling()
   }
 
   onOpenedChanged: {
-    if (opened)
+    if (opened) {
       Qt.callLater(function() { popupKeyCatcher.forceActiveFocus() })
+      refreshInBackground()
+    }
+  }
+
+  Process {
+    id: shellConfigProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var mins = parseInt(String(text || "").trim(), 10)
+        if (!isNaN(mins) && mins > 0)
+          root.pollIntervalMinutes = mins
+      }
+    }
   }
 
   Process {
@@ -191,10 +220,12 @@ Panel {
   Timer {
     id: pollTimer
     interval: root.pollIntervalMs
-    running: false
+    running: root.pollStarted
     repeat: true
     onTriggered: root.refreshInBackground()
   }
+
+  onPollIntervalMinutesChanged: pollTimer.restart()
 
   IpcHandler {
     target: root.ipcTarget
@@ -270,6 +301,15 @@ Panel {
             text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token, or shopify.dataPath / shopify.stores."
             color: root.dim
             wrapMode: Text.WordWrap
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            width: parent.width
+            visible: root.hasStores && root.lastRefreshedAt !== ""
+            text: "Updated " + root.lastRefreshedAt
+            color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }

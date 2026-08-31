@@ -24,6 +24,7 @@ omarchy plugin enable evo.shopify
 ```json
 "shopify": {
   "apiUrl": "https://data.day.marketing",
+  "pollIntervalMinutes": 5,
   "timezone": "Europe/London",
   "stores": [
     { "key": "DIY", "title": "DIY", "sqliteKey": "diy" },
@@ -62,7 +63,7 @@ Stores are auto-discovered from `*.sqlite` files, or list them explicitly:
 |---|---|
 | Left | Toggle status popup |
 
-Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. The bar reads a local cache on startup, then refreshes from the Worker API every 5 minutes.
+Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. The bar reads a local cache on startup, then refreshes from the Worker API every `pollIntervalMinutes` (default 5) while the shell is running. Set `shopify.pollIntervalMinutes` in `shell.json` to change the interval.
 
 | State | Appearance |
 |---|---|
