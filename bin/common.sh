@@ -46,6 +46,15 @@ evo_worker_curl() {
     "$url"
 }
 
+evo_worker_post() {
+  local url=$1 token
+  token="$(evo_worker_api_token)" || return 1
+  curl -sSf --max-time 120 -X POST \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    "$url"
+}
+
 evo_bar_load_heatmap_colors() {
   declare -gA GITHUB_COLORS=()
   local i color

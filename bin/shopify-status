@@ -545,6 +545,104 @@ fetch_store_snapshot_api() {
     printf '%s' "$payload"
 }
 
+SYNC_TODAY_MIN_INTERVAL_SEC=240
+
+sync_today_cache_key() {
+    printf 'shopify-%s-sync-today' "$(cache_key_slug)"
+}
+
+maybe_run_sync_today() {
+    [[ "$DATA_MODE" == api && -n "$API_URL" ]] || return 0
+    local key path now mtime age
+    key=$(sync_today_cache_key)
+    path=$(evo_bar_cache_path "$key")
+    now=$(date +%s)
+    if [[ -f "$path" ]]; then
+        mtime=$(stat -c %Y "$path" 2>/dev/null || echo 0)
+        age=$((now - mtime))
+        if (( age < SYNC_TODAY_MIN_INTERVAL_SEC )); then
+            return 0
+        fi
+    fi
+    if evo_worker_post "${API_URL%/}/v1/sync/today" >/dev/null 2>&1; then
+        printf '%s' '{}' | evo_bar_cache_write "$key"
+    fi
+}
+
+merge_today_payload() {
+    local today=$1
+    jq -c --argjson today "$today" '
+      def patch_bars($field):
+        if ($today[$field] | length) == 0 then .
+        else
+          (.[$field] // []) as $bars |
+          ($today[$field][0]) as $point |
+          (if ($bars | length) == 0 then [$point]
+           elif $bars[-1].date == $point.date then $bars[:-1] + [$point]
+           elif $bars[-1].date < $point.date then $bars + [$point]
+           else $bars
+           end) as $new |
+          .[$field] = $new
+        end;
+
+      . as $cached |
+      ($cached + {
+        text: $today.text,
+        label: $today.label,
+        symbol: $today.symbol,
+        orders: $today.orders,
+        cos: $today.cos,
+        revenue: $today.revenue,
+        todayDetail: $today.todayDetail,
+        channels: $today.channels,
+        month: $today.month
+      })
+      | patch_bars("bars")
+      | patch_bars("orderBars")
+      | patch_bars("sessionBars")
+      | patch_bars("spendBars")
+      | patch_bars("cvrBars")
+      | patch_bars("aovBars")
+      | patch_bars("cosBars")
+    '
+}
+
+build_one_store_api_refresh() {
+    local store_prefix=$1
+    local tz_name today_payload cached merged sym today_sales_val cos_str label_text
+
+    if ! find_store "$store_prefix"; then
+        json_text "Error: Store ${store_prefix} not found"
+        return 1
+    fi
+
+    tz_name="${EVO_SHOPIFY_TZ:-$DEFAULT_TZ}"
+    tz_name="${tz_name// /}"
+    [[ -z "$tz_name" ]] && tz_name="$DEFAULT_TZ"
+
+    today_payload=$(fetch_store_snapshot_api "$STORE_SITE_KEY" 1 "$tz_name") || {
+        json_text "${STORE_DISPLAY}: API error"
+        return 1
+    }
+
+    cached=$(evo_bar_cache_read_any "$(store_cache_key "$store_prefix" "$SNAPSHOT_DAYS")" 2>/dev/null || true)
+    if payload_is_ok "$cached"; then
+        merged=$(printf '%s' "$cached" | merge_today_payload "$today_payload")
+    else
+        merged=$(fetch_store_snapshot_api "$STORE_SITE_KEY" "$SNAPSHOT_DAYS" "$tz_name") || {
+            json_text "${STORE_DISPLAY}: API error"
+            return 1
+        }
+    fi
+
+    sym=$(jq -r '.symbol // "£"' <<<"$merged")
+    today_sales_val=$(format_int_commas "$(jq -r '.todayDetail.revenue // 0' <<<"$merged")")
+    cos_str=$(jq -r '.cos // "—"' <<<"$merged")
+    label_text="${STORE_DISPLAY}${sym}${today_sales_val} | ${cos_str}"
+    jq -c --arg text "$label_text" --arg label "$label_text" \
+        '.text = $text | .label = $label' <<<"$merged"
+}
+
 config_data_path() {
     local data_path
     data_path="$(merged_config | jq -r '.shopify.dataPath // ""')"
@@ -721,10 +819,23 @@ cmd_refresh() {
     stores=$(stores_json)
     payloads_json='{}'
 
+    if [[ "$DATA_MODE" == api ]]; then
+        maybe_run_sync_today
+    fi
+
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
         local prev=""
-        if ! one=$(build_one_store "$key" "$SNAPSHOT_DAYS"); then
+        if [[ "$DATA_MODE" == api ]]; then
+            if ! one=$(build_one_store_api_refresh "$key"); then
+                [[ -n "$one" ]] || one=$(json_text "Error: Store ${key} not found")
+                if prev=$(evo_bar_cache_read_any "$(store_cache_key "$key" "$SNAPSHOT_DAYS")" 2>/dev/null) && payload_is_ok "$prev"; then
+                    one="$prev"
+                fi
+            else
+                printf '%s\n' "$one" | evo_bar_cache_write "$(store_cache_key "$key" "$SNAPSHOT_DAYS")"
+            fi
+        elif ! one=$(build_one_store "$key" "$SNAPSHOT_DAYS"); then
             [[ -n "$one" ]] || one=$(json_text "Error: Store ${key} not found")
             if prev=$(evo_bar_cache_read_any "$(store_cache_key "$key" "$SNAPSHOT_DAYS")" 2>/dev/null) && payload_is_ok "$prev"; then
                 one="$prev"
