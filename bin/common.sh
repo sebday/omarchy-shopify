@@ -9,6 +9,43 @@ EVO_SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
 
 declare -gA GITHUB_COLORS=()
 
+evo_load_shopify_env() {
+  local f
+  for f in \
+    "${SHOPIFY_ENV_FILE:-}" \
+    "${HOME}/work/ecommerce-data/.env" \
+    "${HOME}/projects/ecommerce-data/.env"
+  do
+    [[ -n "$f" && -f "$f" ]] || continue
+    set -a
+    # shellcheck disable=SC1090
+    source "$f"
+    set +a
+    return 0
+  done
+  return 1
+}
+
+evo_load_shopify_env || true
+
+evo_worker_api_token() {
+  local cfg token
+  cfg="$(cat "${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}" 2>/dev/null || echo '{}')"
+  token="$(jq -r '.shopify.apiToken // ""' <<<"$cfg")"
+  [[ -n "$token" ]] || token="${ECOMMERCE_API_TOKEN:-}"
+  [[ -n "$token" ]] || token="$(pass show omarchy/ecommerce-data/api-token 2>/dev/null || true)"
+  [[ -n "$token" ]] || return 1
+  printf '%s' "$token"
+}
+
+evo_worker_curl() {
+  local url=$1 token
+  token="$(evo_worker_api_token)" || return 1
+  curl -sSf --max-time 25 \
+    -H "Authorization: Bearer ${token}" \
+    "$url"
+}
+
 evo_bar_load_heatmap_colors() {
   declare -gA GITHUB_COLORS=()
   local i color

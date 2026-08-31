@@ -9,32 +9,46 @@ Bar widget for Shopify store revenue: today's KPIs and a sparkline for every sto
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/sebday/omarchy-plugin-shopify.git
+omarchy plugin add https://github.com/sebday/omarchy-shopify.git
 omarchy plugin enable evo.shopify
 ```
 
 ## Requirements
 
-- `sqlite3` and `jq` on `PATH`
-- `ssh` on `PATH` when `dataPath` is remote
-- ecommerce-data KPI sqlite dumps (one `*.sqlite` per store)
+- `jq` and `curl` on `PATH`
+- For Worker API mode (recommended): `pass show omarchy/ecommerce-data/api-token`
+- Legacy SQLite mode: `sqlite3`, optional `ssh` when `dataPath` is remote
+
+### Worker API (recommended)
 
 ```json
 "shopify": {
-  "dataPath": "server:~/projects/ecommerce-data/data",
+  "apiUrl": "https://data.day.marketing",
+  "timezone": "Europe/London",
+  "stores": [
+    { "key": "DIY", "title": "DIY", "sqliteKey": "diy" },
+    { "key": "TGS", "title": "TGS", "sqliteKey": "tgs" }
+  ]
+}
+```
+
+`apiUrl` points at the Worker. You can omit it if `ECOMMERCE_API_URL` is set in `~/work/ecommerce-data/.env`. Auth is bearer-only — token from `pass show omarchy/ecommerce-data/api-token`, `~/work/ecommerce-data/.env`, or `shopify.apiToken` in `shell.json`.
+
+### Legacy SQLite over SSH
+
+```json
+"shopify": {
+  "dataPath": "server:~/work/ecommerce-data/data",
   "timezone": "Europe/London"
 }
 ```
 
-`dataPath` points at the sqlite directory on the remote host. The plugin queries it over SSH — no local copy.
-
 | `dataPath` | Behaviour |
 |---|---|
-| `zotac:~/projects/ecommerce-data/data` | SSH to `zotac` (default when unset) |
-| `user@host:~/path` | SSH with explicit user |
+| `host:~/path` | SSH to host |
 | `/local/path` | Local read-only sqlite queries |
 
-Stores are auto-discovered from `*.sqlite` files in `dataPath`. To set titles and admin links explicitly:
+Stores are auto-discovered from `*.sqlite` files, or list them explicitly:
 
 ```json
 "stores": [
@@ -48,7 +62,7 @@ Stores are auto-discovered from `*.sqlite` files in `dataPath`. To set titles an
 |---|---|
 | Left | Toggle status popup |
 
-Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. Each card uses the store favicon when `{sqliteKey}.favicon.png` is available locally (or next to the sqlite files). The bar reads a local cache on startup, then refreshes from zotac in the background every 5 minutes.
+Left-click opens a compact popup with today's KPIs and a 30-day revenue chart for each store. The bar reads a local cache on startup, then refreshes from the Worker API every 5 minutes.
 
 | State | Appearance |
 |---|---|

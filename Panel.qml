@@ -267,7 +267,7 @@ Panel {
           Text {
             width: parent.width
             visible: !root.storesLoading && !root.hasStores
-            text: "Set shopify.dataPath in shell.json, or list stores under shopify.stores."
+            text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token, or shopify.dataPath / shopify.stores."
             color: root.dim
             wrapMode: Text.WordWrap
             font.family: root.fontFamily

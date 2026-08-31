@@ -3,8 +3,10 @@
 # Reads merged KPI rows from ecommerce-data SQLite (fact_kpi_daily).
 #
 # Config (shell.json shopify block):
+#   apiUrl    — Worker base URL (preferred; reads D1 via HTTP)
 #   dataPath  — host:dir or user@host:dir (remote, default) or local path
 #   timezone, stores
+#   apiToken — Bearer token (or env ECOMMERCE_API_TOKEN from ~/work/ecommerce-data/.env)
 
 set -euo pipefail
 
@@ -15,9 +17,10 @@ source "${_bin_dir}/common.sh"
 merged_config() { cat "${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}" 2>/dev/null || echo '{}'; }
 
 DEFAULT_TZ="Europe/London"
-DEFAULT_DATA_PATH="zotac:~/projects/ecommerce-data/data"
+DEFAULT_DATA_PATH=""
+API_URL=""
 DATA_PATH=""
-DATA_MODE=""       # local | remote
+DATA_MODE=""       # api | local | remote
 DATA_LOCAL=""      # absolute local data dir
 DATA_SSH=""        # user@host
 DATA_REMOTE_DIR="" # path on remote host
@@ -67,19 +70,46 @@ discover_stores_remote() {
     discover_stores_from_names "${names[@]}"
 }
 
+discover_stores_api() {
+    local sites_json key display
+    sites_json=$(evo_worker_curl "${API_URL%/}/v1/sites" 2>/dev/null) || return 1
+    STORES=()
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        display="${key^^} "
+        STORES+=("${key^^}|${display}|${key}")
+    done < <(jq -r '.sites[]? // empty' <<<"$sites_json")
+    ((${#STORES[@]} > 0))
+}
+
 resolve_data_path() {
-    local cfg data_path
+    local cfg data_path api_url
     cfg="$(merged_config | jq -c '.shopify // {}')"
     DEFAULT_TZ="$(jq -r '.timezone // "Europe/London"' <<<"$cfg")"
+    api_url="$(jq -r '.apiUrl // ""' <<<"$cfg")"
+    api_url="${api_url// /}"
+    [[ -n "$api_url" ]] || api_url="${ECOMMERCE_API_URL:-}"
+    [[ -n "$api_url" ]] || api_url="${CLOUD_STORE_URL:-}"
+    api_url="${api_url// /}"
+
     data_path="$(jq -r '.dataPath // ""' <<<"$cfg")"
     data_path="${data_path// /}"
-    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
 
-    DATA_PATH="$data_path"
+    DATA_PATH=""
     DATA_MODE=""
     DATA_LOCAL=""
     DATA_SSH=""
     DATA_REMOTE_DIR=""
+    API_URL=""
+
+    if [[ -n "$api_url" ]]; then
+        DATA_MODE=api
+        API_URL="${api_url%/}"
+        return 0
+    fi
+
+    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
+    DATA_PATH="$data_path"
 
     if [[ "$DATA_PATH" =~ ^([^@]+)@([^:]+):(.+)$ ]]; then
         DATA_MODE=remote
@@ -101,22 +131,47 @@ resolve_data_path() {
 load_shopify_config() {
     STORES=()
     resolve_data_path || return 0
-    if [[ "$DATA_MODE" == local ]]; then
+    if [[ "$DATA_MODE" == api ]]; then
+        discover_stores_api || load_stores_from_config || true
+    elif [[ "$DATA_MODE" == local ]]; then
         discover_stores_local "$DATA_LOCAL" || true
     elif [[ "$DATA_MODE" == remote ]]; then
         discover_stores_remote || true
     fi
 }
 
-config_data_path() {
-    local data_path
-    data_path="$(merged_config | jq -r '.shopify.dataPath // ""')"
-    data_path="${data_path// /}"
-    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
-    printf '%s' "$data_path"
+load_stores_from_config() {
+    local cfg_json entry prefix title sqlite_key
+    cfg_json="$(merged_config | jq -c '.shopify.stores // []')"
+    [[ "$(jq -r 'length' <<<"$cfg_json")" -gt 0 ]] || return 1
+    STORES=()
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        prefix="$(jq -r '.key // ""' <<<"$entry")"
+        [[ -n "$prefix" ]] || continue
+        sqlite_key="$(jq -r '.sqliteKey // (.key | ascii_downcase)' <<<"$entry")"
+        STORES+=("${prefix}|${prefix} |${sqlite_key}")
+    done < <(jq -c '.[]' <<<"$cfg_json")
+    ((${#STORES[@]} > 0))
+}
+
+config_api_url() {
+    local api_url
+    api_url="$(merged_config | jq -r '.shopify.apiUrl // ""')"
+    api_url="${api_url// /}"
+    [[ -n "$api_url" ]] || api_url="${ECOMMERCE_API_URL:-}"
+    [[ -n "$api_url" ]] || api_url="${CLOUD_STORE_URL:-}"
+    api_url="${api_url// /}"
+    printf '%s' "$api_url"
 }
 
 cache_key_slug() {
+    local api
+    api="$(config_api_url)"
+    if [[ -n "$api" ]]; then
+        printf '%s' "$api" | tr '/:@~ ' '_'
+        return
+    fi
     printf '%s' "$(config_data_path)" | tr '/:@~ ' '_'
 }
 
@@ -466,6 +521,9 @@ find_store() {
 
 data_path_ready() {
     case "$DATA_MODE" in
+        api)
+            [[ -n "$API_URL" ]] && evo_worker_api_token >/dev/null
+            ;;
         local)
             [[ -n "$DATA_LOCAL" && -d "$DATA_LOCAL" ]]
             ;;
@@ -476,6 +534,23 @@ data_path_ready() {
             false
             ;;
     esac
+}
+
+fetch_store_snapshot_api() {
+    local site_key=$1 days=$2 tz_name=$3
+    local url payload
+    url="${API_URL}/v1/sites/${site_key}/kpi/snapshot?days=${days}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
+    payload=$(evo_worker_curl "$url") || return 1
+    payload_is_ok "$payload" || return 1
+    printf '%s' "$payload"
+}
+
+config_data_path() {
+    local data_path
+    data_path="$(merged_config | jq -r '.shopify.dataPath // ""')"
+    data_path="${data_path// /}"
+    [[ -n "$data_path" ]] || data_path="$DEFAULT_DATA_PATH"
+    printf '%s' "$data_path"
 }
 
 EMPTY_SNAPSHOT='{"stores":[],"payloads":{}}'
@@ -521,9 +596,39 @@ cache_favicons() {
 
 cmd_cache() {
     local cached slug prefix f base key stores payloads_json one snapshot
+    local cfg_count cached_count
+
+    cfg_count="$(merged_config | jq -r '(.shopify.stores // []) | length')"
+
     if cached=$(evo_bar_cache_read "$(snapshot_cache_key)" "$CACHE_TTL_SEC" 2>/dev/null); then
-        snapshot_with_icons "$cached"
-        return 0
+        cached_count="$(jq -r '(.stores // []) | length' <<<"$cached")"
+        if [[ "$cfg_count" -eq 0 || "$cached_count" -eq "$cfg_count" ]]; then
+            snapshot_with_icons "$cached"
+            return 0
+        fi
+    fi
+
+    if [[ "$cfg_count" -gt 0 ]]; then
+        stores=$(stores_json)
+        payloads_json='{}'
+        while IFS= read -r key; do
+            [[ -n "$key" ]] || continue
+            one=""
+            if one=$(evo_bar_cache_read_any "$(store_cache_key "$key" "$SNAPSHOT_DAYS")" 2>/dev/null) && payload_is_ok "$one"; then
+                :
+            elif data_path_ready && one=$(build_one_store "$key" "$SNAPSHOT_DAYS" 2>/dev/null); then
+                printf '%s\n' "$one" | evo_bar_cache_write "$(store_cache_key "$key" "$SNAPSHOT_DAYS")"
+            fi
+            [[ -n "$one" ]] || continue
+            payloads_json=$(jq -c --arg k "$key" --argjson v "$one" '. + {($k): $v}' <<<"$payloads_json")
+        done < <(jq -r '.[].key // empty' <<<"$stores")
+
+        if [[ "$payloads_json" != "{}" ]]; then
+            snapshot=$(snapshot_with_icons "$(jq -c --argjson stores "$stores" '{stores: $stores, payloads: .}' <<<"$payloads_json")")
+            printf '%s\n' "$snapshot" | evo_bar_cache_write "$(snapshot_cache_key)"
+            printf '%s\n' "$snapshot"
+            return 0
+        fi
     fi
 
     slug=$(cache_key_slug)
@@ -577,7 +682,9 @@ stores_json() {
         done < <(jq -c '.[]' <<<"$cfg_json")
     else
         if ((${#STORES[@]} == 0)) && data_path_ready; then
-            if [[ "$DATA_MODE" == local ]]; then
+            if [[ "$DATA_MODE" == api ]]; then
+                discover_stores_api || load_stores_from_config || true
+            elif [[ "$DATA_MODE" == local ]]; then
                 discover_stores_local "$DATA_LOCAL" || true
             else
                 discover_stores_remote || true
@@ -679,7 +786,40 @@ build_one_store() {
     fi
 
     if ! data_path_ready; then
-        json_text "Shopify: set shopify.dataPath in shell.json"
+        if [[ "$DATA_MODE" == api ]]; then
+            json_text "Shopify: set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token"
+        else
+            json_text "Shopify: set shopify.dataPath in shell.json"
+        fi
+        return 0
+    fi
+
+    if [[ "$DATA_MODE" == api ]]; then
+        local site_key api_payload sym today_sales_val cos_str label_text
+        if [[ -n "$store_prefix" ]]; then
+            if ! find_store "$store_prefix"; then
+                json_text "Error: Store ${store_prefix} not found"
+                return 1
+            fi
+            site_key="$STORE_SITE_KEY"
+        else
+            if ((${#STORES[@]} == 0)); then
+                json_text "Shopify: no stores found"
+                return 0
+            fi
+            IFS='|' read -r STORE_PREFIX STORE_DISPLAY STORE_SITE_KEY <<< "${STORES[0]}"
+            site_key="$STORE_SITE_KEY"
+        fi
+        api_payload=$(fetch_store_snapshot_api "$site_key" "$days" "$tz_name") || {
+            json_text "${STORE_DISPLAY}: API error"
+            return 1
+        }
+        sym=$(jq -r '.symbol // "£"' <<<"$api_payload")
+        today_sales_val=$(format_int_commas "$(jq -r '.todayDetail.revenue // 0' <<<"$api_payload")")
+        cos_str=$(jq -r '.cos // "—"' <<<"$api_payload")
+        label_text="${STORE_DISPLAY}${sym}${today_sales_val} | ${cos_str}"
+        jq -c --arg text "$label_text" --arg label "$label_text" \
+            '.text = $text | .label = $label' <<<"$api_payload"
         return 0
     fi
 
