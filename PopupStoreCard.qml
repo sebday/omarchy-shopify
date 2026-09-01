@@ -14,14 +14,17 @@ Item {
   property string iconPath: ""
   property var externalPayload: null
 
+  property string storeKey: ""
+  property int storeIndex: 0
+
   property color foreground: Color.foreground
   property color urgent: Color.urgent
   property color accent: Color.accent
   property color dim: Qt.darker(foreground, 1.4)
   property color surface: Color.popups.background
   property string fontFamily: Style.font.family
-  property var palette: []
 
+  readonly property color storeAccent: Model.storeColor(storeKey, storeIndex)
   readonly property var storeData: externalPayload || ({})
   readonly property bool loading: !externalPayload
   readonly property string adminUrl: adminSlug !== ""
@@ -33,7 +36,7 @@ Item {
   readonly property var period: hasStoreData ? (storeData.period || {}) : {}
   readonly property string currency: hasStoreData ? String(storeData.symbol || "£") : "£"
   readonly property var revenueBars: hasStoreData
-    ? Model.themeBarArray(storeData.bars, palette)
+    ? Model.themeBarArrayForStore(storeData.bars, storeAccent)
     : []
   readonly property string errorText: storeData && storeData.error ? String(storeData.error) : ""
 
@@ -71,7 +74,7 @@ Item {
           StoreIcon {
             iconPath: root.iconPath
             foreground: root.foreground
-            accent: root.accent
+            accent: root.storeAccent
             fontFamily: root.fontFamily
             size: Style.font.display
           }
@@ -100,18 +103,21 @@ Item {
         Layout.fillWidth: true
         label: "Revenue"
         value: Model.statTodayRevenue(root.storeData, root.todayDetail, root.currency)
+        valueColor: root.storeAccent
       }
 
       StatTile {
         Layout.fillWidth: true
         label: "Orders"
         value: Model.statOrders(root.todayDetail, root.storeData)
+        valueColor: root.storeAccent
       }
 
       StatTile {
         Layout.fillWidth: true
         label: "CoS"
         value: String(root.todayDetail.cos || root.storeData.cos || "—")
+        valueColor: root.storeAccent
       }
 
       StatTile {
@@ -120,7 +126,7 @@ Item {
         value: root.period.revenue !== undefined
           ? Model.formatRevenue(root.period.revenue, root.currency)
           : "—"
-        valueColor: root.foreground
+        valueColor: root.storeAccent
       }
     }
 
@@ -129,7 +135,7 @@ Item {
       visible: root.revenueBars.length > 0
       implicitHeight: chartColumn.implicitHeight + Style.spacing.lg + Style.spacing.xs
       color: Color.popups.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, 1)
+      borderSpec: Border.flat(root.storeAccent, 1)
       radius: Style.cornerRadius
       clip: true
 
@@ -142,22 +148,32 @@ Item {
         anchors.rightMargin: Style.spacing.lg
         anchors.topMargin: Style.spacing.lg
         anchors.bottomMargin: Style.spacing.xs
-        spacing: 0
-
-        Text {
-          width: parent.width
-          visible: chart.hasTooltip
-          text: chart.tooltipLabel
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          horizontalAlignment: Text.AlignHCenter
-          elide: Text.ElideRight
-        }
+        spacing: Style.spacing.sm
 
         Item {
+          id: chartHeader
           width: parent.width
-          height: Style.font.caption
+          height: chartTitle.height
+
+          PanelSectionHeader {
+            id: chartTitle
+            width: parent.width
+            text: "REVENUE"
+            foreground: root.storeAccent
+            fontFamily: root.fontFamily
+          }
+
+          Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width * 0.68
+            text: chart.hasTooltip ? chart.tooltipLabel : "Last 30 days"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignRight
+            elide: Text.ElideLeft
+          }
         }
 
         RevenueBarChart {
@@ -167,7 +183,7 @@ Item {
           bars: root.revenueBars
           currency: root.currency
           foreground: root.foreground
-          accent: root.accent
+          accent: root.storeAccent
           background: root.surface
           fontFamily: root.fontFamily
         }
@@ -182,7 +198,7 @@ Item {
 
     implicitHeight: tileColumn.implicitHeight + Style.spacing.lg * 2
     color: Color.popups.background
-    borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, 1)
+    borderSpec: Border.flat(root.storeAccent, 1)
     radius: Style.cornerRadius
 
     Column {

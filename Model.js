@@ -2,6 +2,22 @@
 
 var DEFAULT_HEATMAP_COLORS = ["#45475a", "#89b4fa", "#74c7ec", "#89dceb", "#cba6f7"]
 
+// Match tui/storecolor.go (ANSI 6 = cyan, 10 = bright green).
+var STORE_COLORS = {
+  DIY: "#89dceb",
+  TGS: "#a6e3a1"
+}
+
+var STORE_COLOR_FALLBACK = ["#89dceb", "#a6e3a1", "#fab387", "#f9e2af", "#cba6f7"]
+
+function storeColor(storeKey, index) {
+  var key = String(storeKey || "").toUpperCase().trim()
+  if (STORE_COLORS[key])
+    return STORE_COLORS[key]
+  var i = parseInt(index, 10) || 0
+  return STORE_COLOR_FALLBACK[((i % STORE_COLOR_FALLBACK.length) + STORE_COLOR_FALLBACK.length) % STORE_COLOR_FALLBACK.length]
+}
+
 function heatmapColors(accent) {
   var accentColor = String(accent || "#89b4fa")
   return [
@@ -79,6 +95,7 @@ function normalizeStorePayload(json) {
     revenue: parseFloat(json.revenue) || 0,
     todayDetail: json.todayDetail && typeof json.todayDetail === "object" ? json.todayDetail : {},
     period: json.period && typeof json.period === "object" ? json.period : {},
+    channels: json.channels && typeof json.channels === "object" ? json.channels : {},
     bars: Array.isArray(json.bars) ? json.bars : []
   }
 }
@@ -103,7 +120,7 @@ function parseSnapshot(raw) {
       key: key,
       title: String(entry.title || key),
       adminSlug: String(entry.adminSlug || ""),
-      sqliteKey: String(entry.sqliteKey || key.toLowerCase()),
+      iconKey: String(entry.iconKey || entry.sqliteKey || key.toLowerCase()),
       iconPath: String(entry.iconPath || "")
     })
   }
@@ -127,6 +144,18 @@ function themeBarArray(bars, palette) {
     var level = parseInt(bar.colorLevel, 10)
     if (!isNaN(level) && level >= 0 && level < colors.length)
       bar.color = colors[level]
+    out.push(bar)
+  }
+  return out
+}
+
+function themeBarArrayForStore(bars, storeColor) {
+  if (!Array.isArray(bars)) return []
+  var accent = String(storeColor || "#89b4fa")
+  var out = []
+  for (var i = 0; i < bars.length; i++) {
+    var bar = Object.assign({}, bars[i])
+    bar.color = accent
     out.push(bar)
   }
   return out
@@ -159,6 +188,36 @@ function statOrders(todayDetail, storeData) {
   if (storeData && storeData.orders !== undefined && storeData.orders !== null)
     return String(storeData.orders)
   return "—"
+}
+
+function channelRows(channels, palette) {
+  var ch = channels || {}
+  var total = channelTotal(ch)
+  var colors = palette && palette.length ? palette : DEFAULT_HEATMAP_COLORS
+  var defs = [
+    { label: "Paid", value: parseFloat(ch.paid) || 0 },
+    { label: "Organic", value: parseFloat(ch.organic) || 0 },
+    { label: "Direct", value: parseFloat(ch.direct) || 0 },
+    { label: "Email", value: parseFloat(ch.email) || 0 }
+  ]
+  var out = []
+  for (var i = 0; i < defs.length; i++) {
+    out.push({
+      label: defs[i].label,
+      value: defs[i].value,
+      color: colors[i % colors.length],
+      share: total > 0 ? defs[i].value / total : 0
+    })
+  }
+  return out
+}
+
+function channelTotal(channels) {
+  var ch = channels || {}
+  return (parseFloat(ch.paid) || 0)
+    + (parseFloat(ch.organic) || 0)
+    + (parseFloat(ch.direct) || 0)
+    + (parseFloat(ch.email) || 0)
 }
 
 function barTooltipFromStore(data) {

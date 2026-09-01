@@ -25,7 +25,7 @@ func (m model) active(p panel) bool {
 func (m model) renderBody(height int) string {
 	w := m.contentWidth()
 	if len(m.stores) == 0 {
-		msg := "No stores — set shopify.dataPath in shell.json"
+		msg := "No stores — set shopify.apiUrl in shell.json"
 		if m.err != "" {
 			msg = m.err
 		}

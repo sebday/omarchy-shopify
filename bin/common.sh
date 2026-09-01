@@ -5,8 +5,6 @@ EVO_BAR_CACHE_DIR="${EVO_BAR_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/
 EVO_SHOPIFY_ICON_DIR="${EVO_SHOPIFY_ICON_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/shopify-icons}"
 EVO_BAR_THEME_CSS="${EVO_BAR_THEME_CSS:-$HOME/.themes/current/evo-bar.css}"
 
-EVO_SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
-
 declare -gA GITHUB_COLORS=()
 
 evo_load_shopify_env() {
@@ -108,46 +106,20 @@ evo_bar_cache_write() {
 }
 
 evo_resolve_icon_path() {
-  local sqlite_key=$1 base=${2:-}
+  local icon_key=$1
   local path cache_home
-  [[ -n "$sqlite_key" ]] || return 1
+  [[ -n "$icon_key" ]] || return 1
   cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
   for path in \
-    "${EVO_SHOPIFY_ICON_DIR}/${sqlite_key}.favicon.png" \
-    "${cache_home}/omarchy/shopify-data/${sqlite_key}.favicon.png" \
-    "${base:+${base%/}/${sqlite_key}.favicon.png}"
+    "${EVO_SHOPIFY_ICON_DIR}/${icon_key}.favicon.png" \
+    "${cache_home}/omarchy/shopify-icons/${icon_key}.favicon.png" \
+    "${cache_home}/omarchy/shopify-data/${icon_key}.favicon.png"
   do
     [[ -n "$path" && -f "$path" ]] || continue
     readlink -f "$path"
     return 0
   done
   return 1
-}
-
-evo_ssh_run() {
-  local target=$1
-  shift
-  ssh "${EVO_SSH_OPTS[@]}" "$target" "$@"
-}
-
-# Produce a remote-shell path expression without expanding ~ locally.
-evo_remote_path_expr() {
-  local path=$1
-  if [[ "$path" == "~/"* ]]; then
-    printf '$HOME/%s' "${path:2}"
-  elif [[ "$path" == "~" ]]; then
-    printf '$HOME'
-  else
-    printf '%s' "$path"
-  fi
-}
-
-evo_resolve_remote_dir() {
-  local target=$1 dir=$2 expr resolved
-  expr=$(evo_remote_path_expr "$dir")
-  resolved=$(evo_ssh_run "$target" "readlink -f ${expr}" 2>/dev/null | tr -d '\r')
-  [[ -n "$resolved" ]] || return 1
-  printf '%s' "$resolved"
 }
 
 evo_valid_date() {

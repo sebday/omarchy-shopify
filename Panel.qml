@@ -21,7 +21,6 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property color surface: Color.popups.background
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property var palette: Model.chartPalette(accent, urgent)
 
   property int pollIntervalMinutes: 5
   readonly property int pollIntervalMs: Math.max(60000, pollIntervalMinutes * 60 * 1000)
@@ -36,7 +35,6 @@ Panel {
   property bool pollStarted: false
   property bool demoMode: false
   property string snapshotMode: "cache"
-  property string lastRefreshedAt: ""
 
   property var liveStoreDefs: []
   property var liveStorePayloads: ({})
@@ -78,8 +76,6 @@ Panel {
       storePayloads = next
     }
     storesLoading = false
-    if (snapshotMode === "refresh" && snap.stores.length > 0)
-      lastRefreshedAt = Qt.formatDateTime(new Date(), "hh:mm")
   }
 
   function toggleDemo() {
@@ -298,18 +294,9 @@ Panel {
           Text {
             width: parent.width
             visible: !root.storesLoading && !root.hasStores
-            text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token, or shopify.dataPath / shopify.stores."
+            text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token."
             color: root.dim
             wrapMode: Text.WordWrap
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            width: parent.width
-            visible: root.hasStores && root.lastRefreshedAt !== ""
-            text: "Updated " + root.lastRefreshedAt
-            color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -337,6 +324,8 @@ Panel {
 
                 PopupStoreCard {
                   width: parent.width
+                  storeKey: String(modelData.key || "")
+                  storeIndex: index
                   title: root.demoMode ? "DEMO MODE" : String(modelData.title || modelData.key || "")
                   adminSlug: String(modelData.adminSlug || "")
                   iconPath: String(modelData.iconPath || "")
@@ -347,7 +336,6 @@ Panel {
                   dim: root.dim
                   surface: root.surface
                   fontFamily: root.fontFamily
-                  palette: root.palette
                 }
               }
             }

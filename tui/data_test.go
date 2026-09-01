@@ -4,7 +4,7 @@ import "testing"
 
 func TestParseSnapshot(t *testing.T) {
 	raw := []byte(`{
-		"stores":[{"key":"DIY","title":"DIY","adminSlug":"x","sqliteKey":"diy"}],
+		"stores":[{"key":"DIY","title":"DIY","adminSlug":"x","iconKey":"diy"}],
 		"payloads":{
 			"DIY":{
 				"symbol":"£",

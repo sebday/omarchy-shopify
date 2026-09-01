@@ -13,7 +13,8 @@ type Store struct {
 	Key       string `json:"key"`
 	Title     string `json:"title"`
 	AdminSlug string `json:"adminSlug"`
-	SqliteKey string `json:"sqliteKey"`
+	IconKey   string `json:"iconKey"`
+	SqliteKey string `json:"sqliteKey,omitempty"` // legacy alias for iconKey
 	IconPath  string `json:"iconPath"`
 }
 
