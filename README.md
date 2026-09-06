@@ -16,7 +16,7 @@ omarchy plugin enable evo.shopify
 ## Requirements
 
 - `jq` and `curl` on `PATH`
-- `pass show omarchy/ecommerce-data/api-token` (or `ECOMMERCE_API_TOKEN` in `~/work/ecommerce-data/.env`)
+- `pass show omarchy/ecommerce-data/api-token`
 
 ### Worker API
 
@@ -32,7 +32,7 @@ omarchy plugin enable evo.shopify
 }
 ```
 
-`apiUrl` points at the Worker. You can omit it if `ECOMMERCE_API_URL` is set in `~/work/ecommerce-data/.env`. Auth is bearer-only — token from `pass show omarchy/ecommerce-data/api-token`, `~/work/ecommerce-data/.env`, or `shopify.apiToken` in `shell.json`.
+`apiUrl` points at the Worker and must be `https://`. Auth is bearer-only from `pass show omarchy/ecommerce-data/api-token`.
 
 Stores are discovered from `GET /v1/sites` when `stores` is omitted. Optional `adminSlug` links to the Shopify admin. Favicon files in `~/.cache/omarchy/shopify-icons/` are named `{iconKey}.favicon.png` (defaults to lowercase `key`).
 
@@ -58,3 +58,17 @@ Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints 
 omarchy-shell shell toggle evo.shopify '{}'
 omarchy-shell evo.shopify refresh
 ```
+
+## Removing
+
+```bash
+omarchy plugin remove evo.shopify
+```
+
+That deletes the plugin directory. It does not delete:
+
+- `~/.cache/omarchy/bar/*.json` shopify caches
+- `~/.cache/omarchy/shopify-icons/`
+- `pass` entry `omarchy/ecommerce-data/api-token`
+
+Network: the configured HTTPS worker origin.

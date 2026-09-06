@@ -7,50 +7,46 @@ EVO_BAR_THEME_CSS="${EVO_BAR_THEME_CSS:-$HOME/.themes/current/evo-bar.css}"
 
 declare -gA GITHUB_COLORS=()
 
-evo_load_shopify_env() {
-  local f
-  for f in \
-    "${SHOPIFY_ENV_FILE:-}" \
-    "${HOME}/work/ecommerce-data/.env" \
-    "${HOME}/projects/ecommerce-data/.env"
-  do
-    [[ -n "$f" && -f "$f" ]] || continue
-    set -a
-    # shellcheck disable=SC1090
-    source "$f"
-    set +a
-    return 0
-  done
-  return 1
-}
-
-evo_load_shopify_env || true
-
 evo_worker_api_token() {
-  local cfg token
-  cfg="$(cat "${OMARCHY_SHELL_CONFIG:-$HOME/.config/omarchy/shell.json}" 2>/dev/null || echo '{}')"
-  token="$(jq -r '.shopify.apiToken // ""' <<<"$cfg")"
-  [[ -n "$token" ]] || token="${ECOMMERCE_API_TOKEN:-}"
-  [[ -n "$token" ]] || token="$(pass show omarchy/ecommerce-data/api-token 2>/dev/null || true)"
+  local token=""
+  token="$(pass show omarchy/ecommerce-data/api-token 2>/dev/null || true)"
   [[ -n "$token" ]] || return 1
+  case "$token" in *'"'*|*\\*|$'\n'*) return 1 ;; esac
   printf '%s' "$token"
 }
 
 evo_worker_curl() {
-  local url=$1 token
+  local url=$1 token max=1048576 resp
   token="$(evo_worker_api_token)" || return 1
-  curl -sSf --max-time 25 \
-    -H "Authorization: Bearer ${token}" \
-    "$url"
+  [[ $url == https://* ]] || return 1
+  resp=$(
+    printf '%s\n' "header = \"Authorization: Bearer ${token}\"" \
+      | /usr/bin/curl -q -sS --fail --config - \
+          --proto '=https' --proto-redir '=https' \
+          --max-time 25 --connect-timeout 5 --max-filesize "$max" --noproxy '*' \
+          -- "$url" \
+      | /usr/bin/head -c $((max + 1))
+  ) || return 1
+  [ ${#resp} -le "$max" ] || return 1
+  printf '%s' "$resp"
 }
 
 evo_worker_post() {
-  local url=$1 token
+  local url=$1 token max=1048576 resp
   token="$(evo_worker_api_token)" || return 1
-  curl -sSf --max-time 120 -X POST \
-    -H "Authorization: Bearer ${token}" \
-    -H "Content-Type: application/json" \
-    "$url"
+  [[ $url == https://* ]] || return 1
+  resp=$(
+    printf '%s\n' \
+      "header = \"Authorization: Bearer ${token}\"" \
+      'header = "Content-Type: application/json"' \
+      | /usr/bin/curl -q -sS --fail --config - \
+          --proto '=https' --proto-redir '=https' \
+          --max-time 120 --connect-timeout 5 --max-filesize "$max" --noproxy '*' \
+          -X POST -- "$url" \
+      | /usr/bin/head -c $((max + 1))
+  ) || return 1
+  [ ${#resp} -le "$max" ] || return 1
+  printf '%s' "$resp"
 }
 
 evo_bar_load_heatmap_colors() {
@@ -73,11 +69,28 @@ evo_bar_cache_path() {
   printf '%s/%s.json' "$EVO_BAR_CACHE_DIR" "$1"
 }
 
+evo_private_dir() {
+  local dir="$1"
+  mkdir -p -m 700 "$dir" || return 1
+  [[ ! -L "$dir" ]] || return 1
+  [[ -d "$dir" ]] || return 1
+  [[ "$(stat -c %u "$dir")" == "$(id -u)" ]] || return 1
+  find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null || true
+  find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null || true
+}
+
+evo_read_bounded() {
+  local file="$1" max="${2:-65536}" data
+  [[ -e "$file" ]] || return 1
+  data=$(/usr/bin/dd if="$file" iflag=nofollow,nonblock,count_bytes,fullblock bs=1 count=$((max + 1)) status=none) || return 1
+  [ ${#data} -le "$max" ] || return 1
+  printf '%s' "$data"
+}
+
 evo_bar_cache_read_any() {
   local key="$1" path content
   path="$(evo_bar_cache_path "$key")"
-  [[ -f "$path" ]] || return 1
-  content="$(cat "$path")"
+  content="$(evo_read_bounded "$path")" || return 1
   [[ -n "${content//[[:space:]]/}" ]] || return 1
   printf '%s' "$content"
 }
@@ -86,23 +99,24 @@ evo_bar_cache_read() {
   local key="$1" ttl="${2:-60}"
   local path now mtime age content
   path="$(evo_bar_cache_path "$key")"
-  [[ -f "$path" ]] || return 1
-  content="$(cat "$path")"
-  [[ -n "${content//[[:space:]]/}" ]] || return 1
+  [[ -e "$path" ]] || return 1
   now=$(date +%s)
   mtime=$(stat -c %Y "$path" 2>/dev/null || echo 0)
   age=$((now - mtime))
   (( age < ttl )) || return 1
+  content="$(evo_read_bounded "$path")" || return 1
+  [[ -n "${content//[[:space:]]/}" ]] || return 1
   printf '%s' "$content"
 }
 
 evo_bar_cache_write() {
   local key="$1" path tmp
-  mkdir -p "$EVO_BAR_CACHE_DIR"
+  evo_private_dir "$EVO_BAR_CACHE_DIR" || return 1
   path="$(evo_bar_cache_path "$key")"
-  tmp="$(mktemp "${path}.XXXXXX")"
-  cat >"$tmp"
-  mv "$tmp" "$path"
+  umask 077
+  tmp="$(/usr/bin/mktemp -p "$EVO_BAR_CACHE_DIR" .cache.XXXXXXXXXX)" || return 1
+  cat >"$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -T -- "$tmp" "$path"
 }
 
 evo_resolve_icon_path() {

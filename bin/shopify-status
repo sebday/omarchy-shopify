@@ -3,9 +3,9 @@
 # Reads store KPIs from the ecommerce-data Worker API (D1 over HTTP).
 #
 # Config (shell.json shopify block):
-#   apiUrl    — Worker base URL (or ECOMMERCE_API_URL in ~/work/ecommerce-data/.env)
+#   apiUrl    — HTTPS Worker base URL
 #   timezone, stores, pollIntervalMinutes
-#   apiToken  — Bearer token (or pass show omarchy/ecommerce-data/api-token)
+#   token via pass show omarchy/ecommerce-data/api-token
 
 set -euo pipefail
 
@@ -42,6 +42,7 @@ resolve_api_config() {
     api_url="${api_url// /}"
     API_URL=""
     [[ -n "$api_url" ]] || return 1
+    [[ "$api_url" == https://* ]] || return 1
     API_URL="${api_url%/}"
 }
 

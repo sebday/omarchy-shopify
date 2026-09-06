@@ -177,22 +177,55 @@ Panel {
 
   Process {
     id: shellConfigProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var mins = parseInt(String(text || "").trim(), 10)
+    onStarted: { stdoutBuf = ""; stderrBuf = "" }
+
+    property string stdoutBuf: ""
+    property string stderrBuf: ""
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        shellConfigProc.stdoutBuf += chunk
+        if (shellConfigProc.stdoutBuf.length > 262144) {
+          shellConfigProc.signal(15)
+          shellConfigProc.stdoutBuf = ""
+        }
+      }
+    }
+      onExited: function(exitCode) {
+      var mins = parseInt(String(stdoutBuf || "").trim(), 10)
         if (!isNaN(mins) && mins > 0)
           root.pollIntervalMinutes = mins
-      }
     }
   }
 
   Process {
     id: snapshotProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var raw = String(text || "").trim()
+    onStarted: { stdoutBuf = ""; stderrBuf = "" }
+
+    property string stdoutBuf: ""
+    property string stderrBuf: ""
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        snapshotProc.stdoutBuf += chunk
+        if (snapshotProc.stdoutBuf.length > 262144) {
+          snapshotProc.signal(15)
+          snapshotProc.stdoutBuf = ""
+        }
+      }
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        snapshotProc.stderrBuf += chunk
+        if (snapshotProc.stderrBuf.length > 4096) {
+          snapshotProc.signal(15)
+          snapshotProc.stderrBuf = ""
+        }
+      }
+    }
+      onExited: function(exitCode) {
+      var raw = String(stdoutBuf || "").trim()
         var mode = root.snapshotMode
         root.snapshotRefreshing = false
         if (raw && (mode === "demo" || !root.demoMode))
@@ -208,9 +241,7 @@ Panel {
           root.pendingRefresh = false
           root.refreshInBackground()
         }
-      }
     }
-    stderr: StdioCollector { waitForEnd: true }
   }
 
   Timer {
@@ -273,6 +304,7 @@ Panel {
           spacing: Style.space(16)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: root.storesLoading && !root.hasStores
             text: "Loading stores…"
@@ -282,6 +314,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: !root.storesLoading && !root.hasStores
             text: root.storesError || "No stores configured"
@@ -292,6 +325,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: !root.storesLoading && !root.hasStores
             text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token."

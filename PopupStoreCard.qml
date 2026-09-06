@@ -83,6 +83,7 @@ Item {
     }
 
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       visible: !root.hasStoreData && !root.loading && root.errorText !== ""
       text: root.errorText
@@ -164,6 +165,7 @@ Item {
           }
 
           Text {
+            textFormat: Text.PlainText
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width * 0.68
@@ -208,6 +210,7 @@ Item {
       spacing: Style.spacing.labelGap
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: value
         color: valueColor
@@ -219,6 +222,7 @@ Item {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: label
         color: root.dim

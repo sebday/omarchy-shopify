@@ -1,5 +1,20 @@
 .pragma library
 
+
+function plain(value, maxLen) {
+  var s = String(value == null ? "" : value)
+  var max = maxLen || 240
+  var out = ""
+  for (var i = 0; i < s.length && out.length < max; i++) {
+    var code = s.charCodeAt(i)
+    if (code < 32 || (code >= 127 && code < 160)) continue
+    var c = s.charAt(i)
+    if (c === "<" || c === ">" || c === "&") continue
+    out += c
+  }
+  return out
+}
+
 var DEFAULT_HEATMAP_COLORS = ["#45475a", "#89b4fa", "#74c7ec", "#89dceb", "#cba6f7"]
 
 // Match tui/storecolor.go (ANSI 6 = cyan, 10 = bright green).
@@ -222,11 +237,11 @@ function channelTotal(channels) {
 
 function barTooltipFromStore(data) {
   if (!data || !data.ok) {
-    if (data && data.error) return String(data.error).replace(/<[^>]+>/g, "").trim()
+    if (data && data.error) return plain(data.error)
     return ""
   }
-  if (data.label) return data.label
-  if (data.text) return String(data.text).replace(/<[^>]+>/g, "").trim()
+  if (data.label) return plain(data.label)
+  if (data.text) return plain(data.text)
   return "Shopify"
 }
 
@@ -240,7 +255,7 @@ function barTooltipFromStores(storeDefs, payloads) {
     var line = barTooltipFromStore(map[key])
     if (line) lines.push(line)
   }
-  return lines.length > 0 ? lines.join("\n") : "Shopify"
+  return lines.length > 0 ? plain(lines.join("\n"), 480) : "Shopify"
 }
 
 function iconActiveFromStore(data) {
