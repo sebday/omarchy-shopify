@@ -6,6 +6,11 @@
 #   apiUrl    — HTTPS Worker base URL
 #   timezone, stores, pollIntervalMinutes
 #   token via pass show omarchy/ecommerce-data/api-token
+#
+# Worker routes used:
+#   GET  /v1/sites
+#   GET  /v1/sites/:site/kpi/summary
+#   POST /v1/sync/today
 
 set -euo pipefail
 
@@ -162,11 +167,104 @@ api_ready() {
     [[ -n "$API_URL" ]] && evo_worker_api_token >/dev/null
 }
 
+summary_to_store_payload() {
+    jq -c '
+      def num($v): ($v // 0) | tonumber? // 0;
+      def money($v): ((num($v) * 100) | round) / 100;
+      def is_leap($y): ($y % 4 == 0) and (($y % 100 != 0) or ($y % 400 == 0));
+      def days_in_month(iso):
+        (iso[0:4] | tonumber) as $y
+        | (iso[5:7] | tonumber) as $m
+        | [0, 31, (if is_leap($y) then 29 else 28 end), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        | .[$m];
+      def level($max; $v):
+        if $max <= 0 or $v <= 0 then 0
+        else (($v / $max * 4) | floor | if . > 4 then 4 elif . < 1 then 1 else . end)
+        end;
+      def series($daily; $values; $orders):
+        ($values | map(num(.)) | max // 0) as $max
+        | [range(0; $daily | length)]
+        | map(
+            . as $i
+            | ($daily[$i]) as $row
+            | num($values[$i]) as $v
+            | {
+                date: ($row.dt // ""),
+                value: $v,
+                orders: num($orders[$i]),
+                level: level($max; $v),
+                colorLevel: level($max; $v),
+                color: ""
+              }
+          );
+
+      (.daily // []) as $daily
+      | (.to // ($daily[-1].dt // "")) as $to
+      | (($daily | map(select(.dt == $to)) | last) // $daily[-1] // {}) as $today
+      | ($to[0:7]) as $month
+      | ([ $daily[] | select((.dt // "")[0:7] == $month) | num(.revenue) ] | add // 0) as $mtd
+      | (num($today.cos_pct) | tostring) as $cos_num
+      | (if $cos_num == "0" then "0%" else ($cos_num + "%") end) as $cos_str
+      | {
+          symbol: "£",
+          orders: num($today.orders),
+          cos: $cos_str,
+          revenue: money($today.revenue),
+          todayDetail: {
+            date: ($today.dt // $to),
+            calendarDate: $to,
+            revenue: money($today.revenue),
+            orders: num($today.orders),
+            sessions: num($today.sessions),
+            cos: $cos_str,
+            spend: money($today.spend),
+            cvr: num($today.cvr)
+          },
+          period: {
+            days: num(.period_days),
+            revenue: money(.period.revenue),
+            prevRevenue: money(.prev_period.revenue),
+            orders: num(.period.orders),
+            sessions: num(.period.sessions),
+            spend: money(.period.spend)
+          },
+          channels: (.channels // {
+            paid: 0,
+            organic: 0,
+            direct: 0,
+            email: 0
+          }),
+          month: {
+            mtdRevenue: money($mtd),
+            forecastRevenue: money(.forecast),
+            day: (if $to[8:10] then ($to[8:10] | tonumber) else 0 end),
+            daysInMonth: (if $to != "" then days_in_month($to) else 0 end)
+          },
+          bars: series($daily; [$daily[] | money(.revenue)]; [$daily[].orders]),
+          orderBars: series($daily; [$daily[].orders]; [$daily[].orders]),
+          sessionBars: series($daily; [$daily[].sessions]; [$daily[].orders]),
+          spendBars: series($daily; [$daily[] | money(.spend)]; [$daily[].orders]),
+          cvrBars: series($daily; [$daily[].cvr]; [$daily[].orders]),
+          aovBars: series($daily; [$daily[] | money(.aov)]; [$daily[].orders]),
+          cosBars: series($daily; [$daily[] | money(num(.cos_pct) / 100)]; [$daily[].orders])
+        }
+    ' <<<"$1"
+}
+
 fetch_store_snapshot_api() {
     local site_key=$1 days=$2 tz_name=$3
-    local url payload
-    url="${API_URL}/v1/sites/${site_key}/kpi/snapshot?days=${days}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
+    local to from url payload
+    site_key=$(printf '%s' "$site_key" | tr '[:upper:]' '[:lower:]')
+    tz_name="${tz_name// /}"
+    [[ -z "$tz_name" ]] && tz_name="$DEFAULT_TZ"
+    if ! [[ "$days" =~ ^[0-9]+$ ]] || (( days < 1 )); then
+        days=14
+    fi
+    to=$(TZ="$tz_name" date +%F)
+    from=$(TZ="$tz_name" date -d "$to - $((days - 1)) days" +%F)
+    url="${API_URL}/v1/sites/${site_key}/kpi/summary?from=${from}&to=${to}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
     payload=$(evo_worker_curl "$url") || return 1
+    payload=$(summary_to_store_payload "$payload") || return 1
     payload_is_ok "$payload" || return 1
     printf '%s' "$payload"
 }
@@ -195,43 +293,6 @@ maybe_run_sync_today() {
     fi
 }
 
-merge_today_payload() {
-    local today=$1
-    jq -c --argjson today "$today" '
-      def patch_bars($field):
-        if ($today[$field] | length) == 0 then .
-        else
-          (.[$field] // []) as $bars |
-          ($today[$field][0]) as $point |
-          (if ($bars | length) == 0 then [$point]
-           elif $bars[-1].date == $point.date then $bars[:-1] + [$point]
-           elif $bars[-1].date < $point.date then $bars + [$point]
-           else $bars
-           end) as $new |
-          .[$field] = $new
-        end;
-
-      . as $cached |
-      ($cached + {
-        text: $today.text,
-        label: $today.label,
-        symbol: $today.symbol,
-        orders: $today.orders,
-        cos: $today.cos,
-        revenue: $today.revenue,
-        todayDetail: $today.todayDetail,
-        month: $today.month
-      })
-      | patch_bars("bars")
-      | patch_bars("orderBars")
-      | patch_bars("sessionBars")
-      | patch_bars("spendBars")
-      | patch_bars("cvrBars")
-      | patch_bars("aovBars")
-      | patch_bars("cosBars")
-    '
-}
-
 format_int_commas() {
     awk -v n="$1" 'BEGIN {
         s = sprintf("%d", n + 0)
@@ -248,7 +309,7 @@ format_int_commas() {
 
 build_one_store_api_refresh() {
     local store_prefix=$1
-    local tz_name today_payload cached merged sym today_sales_val cos_str label_text
+    local tz_name payload sym today_sales_val cos_str label_text
 
     if ! find_store "$store_prefix"; then
         json_text "Error: Store ${store_prefix} not found"
@@ -259,28 +320,17 @@ build_one_store_api_refresh() {
     tz_name="${tz_name// /}"
     [[ -z "$tz_name" ]] && tz_name="$DEFAULT_TZ"
 
-    today_payload=$(fetch_store_snapshot_api "$STORE_SITE_KEY" 1 "$tz_name") || {
+    payload=$(fetch_store_snapshot_api "$STORE_SITE_KEY" "$SNAPSHOT_DAYS" "$tz_name") || {
         json_text "${STORE_DISPLAY}: API error"
         return 1
     }
 
-    cached=$(evo_bar_cache_read_any "$(store_cache_key "$store_prefix" "$SNAPSHOT_DAYS")" 2>/dev/null || true)
-    if payload_is_ok "$cached"; then
-        merged=$(printf '%s' "$cached" | merge_today_payload "$today_payload")
-        merged=$(restore_period_channels_json "$merged" "$STORE_SITE_KEY" "$SNAPSHOT_DAYS" "$tz_name")
-    else
-        merged=$(fetch_store_snapshot_api "$STORE_SITE_KEY" "$SNAPSHOT_DAYS" "$tz_name") || {
-            json_text "${STORE_DISPLAY}: API error"
-            return 1
-        }
-    fi
-
-    sym=$(jq -r '.symbol // "£"' <<<"$merged")
-    today_sales_val=$(format_int_commas "$(jq -r '.todayDetail.revenue // 0' <<<"$merged")")
-    cos_str=$(jq -r '.cos // "—"' <<<"$merged")
+    sym=$(jq -r '.symbol // "£"' <<<"$payload")
+    today_sales_val=$(format_int_commas "$(jq -r '.todayDetail.revenue // 0' <<<"$payload")")
+    cos_str=$(jq -r '.cos // "—"' <<<"$payload")
     label_text="${STORE_DISPLAY}${sym}${today_sales_val} | ${cos_str}"
     jq -c --arg text "$label_text" --arg label "$label_text" \
-        '.text = $text | .label = $label' <<<"$merged"
+        '.text = $text | .label = $label' <<<"$payload"
 }
 
 EMPTY_SNAPSHOT='{"stores":[],"payloads":{}}'

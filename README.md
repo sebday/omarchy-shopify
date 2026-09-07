@@ -34,7 +34,7 @@ omarchy plugin enable evo.shopify
 
 `apiUrl` points at the Worker and must be `https://`. Auth is bearer-only from `pass show omarchy/ecommerce-data/api-token`.
 
-Stores are discovered from `GET /v1/sites` when `stores` is omitted. Optional `adminSlug` links to the Shopify admin. Favicon files in `~/.cache/omarchy/shopify-icons/` are named `{iconKey}.favicon.png` (defaults to lowercase `key`).
+On each poll the panel `POST`s `/v1/sync/today` (1-day Shopify/Ads/GA4, at most every 4 minutes), then reads `GET /v1/sites/:site/kpi/summary`. Stores come from `GET /v1/sites` when `stores` is omitted. Optional `adminSlug` links to the Shopify admin. Favicon files in `~/.cache/omarchy/shopify-icons/` are named `{iconKey}.favicon.png` (defaults to lowercase `key`).
 
 ## Dashboard
 
