@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shopify KPI JSON for evo.shopify Omarchy bar widget.
+# Shopify KPI JSON for evoshopify.
 # Reads store KPIs from the ecommerce-data Worker API (D1 over HTTP).
 #
 # Config (shell.json shopify block):

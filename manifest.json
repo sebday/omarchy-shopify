@@ -2,20 +2,11 @@
   "schemaVersion": 1,
   "id": "evo.shopify",
   "name": "Shopify",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "seb",
-  "description": "Multi-store Shopify revenue bar widget",
+  "description": "Multi-store Shopify revenue TUI",
   "kinds": [
-    "bar-widget"
+    "tui"
   ],
-  "entryPoints": {
-    "barWidget": "BarWidget.qml"
-  },
-  "barWidget": {
-    "displayName": "Shopify",
-    "description": "Store revenue and orders in the bar",
-    "category": "Info",
-    "allowMultiple": false,
-    "defaultSection": "right"
-  }
+  "entryPoints": {}
 }
