@@ -634,28 +634,9 @@ cmd_stores() {
     printf '[]\n'
 }
 
-cmd_demo() {
-    local path="${_bin_dir}/../demo.json"
-    local icon
-    path=$(cd "${_bin_dir}/.." && pwd)/demo.json
-    icon=$(cd "${_bin_dir}/.." && pwd)/assets/shopify-logo.svg
-    if [[ ! -f "$path" ]]; then
-        printf '%s\n' "$EMPTY_SNAPSHOT"
-        return 1
-    fi
-    if [[ ! -f "$icon" ]]; then
-        cat "$path"
-        return 0
-    fi
-    jq -c --arg icon "$icon" '.stores |= map(.iconPath = $icon)' "$path"
-}
-
 case "${1:-}" in
     cache)
         cmd_cache
-        ;;
-    demo)
-        cmd_demo
         ;;
     refresh)
         cmd_refresh

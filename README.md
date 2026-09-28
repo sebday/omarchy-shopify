@@ -54,13 +54,10 @@ Store borders follow the current Omarchy theme: cyan, bright green, blue, yellow
 |---|---|
 | `q` / `esc` | Close |
 | `r` | Refresh |
-| `d` | Toggle demo data from `demo.json` |
 | Tab / Shift+Tab | Next / previous stat |
 | `n` / `p` | Next / previous store |
 
 Click a stat to chart it. Close the window, or press `q` or `esc`.
-
-Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints the same snapshot the panel uses.
 
 The panel runs `bin/shopify-status` for data and `bin/panel-config` for the poll interval and theme colours. Both go through `bin/panel-run`, which caps output and kills the command when the panel closes.
 

@@ -21,16 +21,12 @@ Item {
   property var payloads: ({})
   property int storeIdx: 0
   property string metric: "revenue"
-  property bool demoMode: false
-  property var liveStores: []
-  property var livePayloads: ({})
   property bool loading: false
   property bool refreshing: false
   property string errorText: ""
   property int pollIntervalMinutes: 5
   property bool pollStarted: false
   property bool pendingRefresh: false
-  property bool pendingDemo: false
   property bool pendingConfig: false
   property int snapToken: 0
   property int configToken: 0
@@ -156,7 +152,6 @@ Item {
     root.opened = false
     root.pollStarted = false
     root.pendingRefresh = false
-    root.pendingDemo = false
     root.pendingConfig = false
     root.snapToken += 1
     root.configToken += 1
@@ -181,36 +176,14 @@ Item {
   }
 
   function refresh() {
-    if (root.demoMode) root.toggleDemo()
     root.runSnapshot("refresh")
   }
 
-  function toggleDemo() {
-    if (root.demoMode) {
-      root.demoMode = false
-      root.pendingDemo = false
-      if (root.liveStores.length > 0) {
-        root.stores = root.liveStores
-        root.payloads = root.livePayloads
-      }
-      root.liveStores = []
-      root.livePayloads = ({})
-      root.ensureMetric()
-      return
-    }
-    root.liveStores = root.stores.slice()
-    root.livePayloads = Object.assign({}, root.payloads)
-    root.demoMode = true
-    root.pendingRefresh = false
-    root.runSnapshot("demo")
-  }
-
   function runSnapshot(mode) {
-    if (mode !== "cache" && mode !== "refresh" && mode !== "demo") return
+    if (mode !== "cache" && mode !== "refresh") return
     if (!root.statusScript || !root.panelRun) return
     if (snapshotProc.running) {
-      if (mode === "demo") root.pendingDemo = true
-      else if (mode === "refresh") root.pendingRefresh = true
+      if (mode === "refresh") root.pendingRefresh = true
       return
     }
     root.snapToken += 1
@@ -224,12 +197,11 @@ Item {
       "/usr/bin/python3", "-I", "-S", root.panelRun,
       "/usr/bin/bash", root.statusScript, mode
     ]
-    root.refreshing = mode !== "demo"
+    root.refreshing = true
     snapshotProc.running = true
   }
 
   function applySnapshot(raw, mode) {
-    if (mode !== "demo" && root.demoMode) return
     var snap = Model.parseSnapshot(raw)
     if (snap.stores.length > 0) {
       root.stores = snap.stores
@@ -324,15 +296,6 @@ Item {
         if (root.stores.length === 0) root.errorText = "Output exceeded the limit"
       } else if (exitCode !== 0) {
         root.loading = false
-        if (mode === "demo") {
-          root.demoMode = false
-          if (root.liveStores.length > 0) {
-            root.stores = root.liveStores
-            root.payloads = root.livePayloads
-          }
-          root.liveStores = []
-          root.livePayloads = ({})
-        }
         if (root.stores.length === 0) {
           var err = Model.plain(snapshotProc.stderrBuf, 160)
           root.errorText = err || "Could not load stores"
@@ -342,10 +305,8 @@ Item {
       }
 
       var follow = ""
-      if (root.pendingDemo && root.demoMode) follow = "demo"
-      else if (mode === "cache" && root.opened && !root.demoMode && !snapshotProc.overflow) follow = "refresh"
-      else if (root.pendingRefresh && !root.demoMode) follow = "refresh"
-      root.pendingDemo = false
+      if (mode === "cache" && root.opened && !snapshotProc.overflow) follow = "refresh"
+      else if (root.pendingRefresh) follow = "refresh"
       root.pendingRefresh = false
       if (follow) root.runSnapshot(follow)
     }
@@ -411,7 +372,7 @@ Item {
     id: pollTimer
     interval: Math.max(60000, root.pollIntervalMinutes * 60 * 1000)
     repeat: true
-    running: root.opened && root.pollStarted && !root.demoMode
+    running: root.opened && root.pollStarted
     onTriggered: root.runSnapshot("refresh")
   }
 
@@ -480,11 +441,6 @@ Item {
           event.accepted = true
           return
         }
-        if (t === "d" || t === "D") {
-          root.toggleDemo()
-          event.accepted = true
-          return
-        }
         if (t === "n" || t === "N") {
           root.stepStore(1)
           event.accepted = true
@@ -545,7 +501,6 @@ Item {
               height: cols.height
               payload: root.payloads[modelData.store.key] || null
               metric: root.metric
-              title: root.demoMode ? "DEMO MODE" : modelData.store.title
               borderColor: Model.storeColor(modelData.store.key, modelData.index, root.palette, root.fallbackAccent)
               backgroundColor: root.colBg
               mutedColor: root.colMuted

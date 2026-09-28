@@ -7,7 +7,6 @@ Item {
 
   property var payload: null
   property string metric: "revenue"
-  property string title: ""
   property color borderColor: "#89dceb"
   property color backgroundColor: "#1a1b26"
   property color mutedColor: "#565f89"
@@ -38,19 +37,6 @@ Item {
     height: root.kpiHeight
 
     Text {
-      id: demoLabel
-      anchors.left: parent.left
-      anchors.top: parent.top
-      visible: root.title === "DEMO MODE"
-      textFormat: Text.PlainText
-      text: root.title
-      color: root.warnColor
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      font.bold: true
-    }
-
-    Text {
       anchors.fill: parent
       visible: !root.payloadOk
       textFormat: Text.PlainText
@@ -65,8 +51,7 @@ Item {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      anchors.top: demoLabel.visible ? demoLabel.bottom : parent.top
-      anchors.topMargin: demoLabel.visible ? Style.space(6) : 0
+      anchors.top: parent.top
       visible: root.payloadOk
       cells: root.cells
       accent: root.borderColor
