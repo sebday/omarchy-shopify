@@ -1,18 +1,27 @@
 # evoshopify
 
-![TUI dashboard](preview.png)
+![Shopify panel](preview.png)
 
-Shopify store revenue in the terminal. Today's KPIs and a sparkline for every store in the data source.
+Shopify store revenue in an Omarchy panel. Today's KPIs and a dotted chart for every store in the data source.
 
 ## Install
 
 ```bash
 omarchy plugin add https://github.com/sebday/omarchy-shopify.git
-go build -o ~/.local/bin/evoshopify ./cmd/evoshopify
-evoshopify
+omarchy plugin enable evo.shopify
 ```
 
-`evoshopify` looks for `bin/shopify-status` next to the checkout, or in `~/.config/omarchy/plugins/evo.shopify`.
+Open it:
+
+```bash
+omarchy-shell shell toggle evo.shopify
+```
+
+Or bind it in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.rebind("SUPER + SHIFT + S", "Shopify", { panel = "evo.shopify" })
+```
 
 ## Requirements
 
@@ -35,22 +44,25 @@ evoshopify
 
 `apiUrl` points at the Worker and must be `https://`. Auth is bearer-only from `pass show omarchy/ecommerce-data/api-token`.
 
-On each poll `shopify-status` posts `/v1/sync/today` (1-day Shopify/Ads/GA4, at most every 4 minutes), then reads `GET /v1/sites/:site/kpi/summary`. Stores come from `GET /v1/sites` when `stores` is omitted.
+On each refresh `shopify-status` posts `/v1/sync/today` (1-day Shopify/Ads/GA4, at most every 4 minutes), then reads `GET /v1/sites/:site/kpi/summary`. Stores come from `GET /v1/sites` when `stores` is omitted.
 
-## Dashboard
+Store borders follow the current Omarchy theme: cyan, bright green, blue, yellow, magenta. DIY is cyan and TGS is bright green.
 
-```bash
-evoshopify
-```
+## Panel
 
 | Key | Action |
 |---|---|
-| `q` / `esc` | Quit |
+| `q` / `esc` | Close |
 | `r` | Refresh |
 | `d` | Toggle demo data from `demo.json` |
-| Tab | Previous / next stat |
+| Tab / Shift+Tab | Next / previous stat |
+| `n` / `p` | Next / previous store |
 
-Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints the same snapshot the TUI uses.
+Click a stat to chart it. Close the window, or press `q` or `esc`.
+
+Demo data lives in `demo.json` at the plugin root. `shopify-status demo` prints the same snapshot the panel uses.
+
+The panel runs `bin/shopify-status` for data and `bin/panel-config` for the poll interval and theme colours. Both go through `bin/panel-run`, which caps output and kills the command when the panel closes.
 
 ## Removing
 

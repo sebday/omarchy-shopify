@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shopify KPI JSON for evoshopify.
+# Shopify KPI JSON for the evo.shopify panel.
 # Reads store KPIs from the ecommerce-data Worker API (D1 over HTTP).
 #
 # Config (shell.json shopify block):

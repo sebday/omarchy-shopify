@@ -2,11 +2,13 @@
   "schemaVersion": 1,
   "id": "evo.shopify",
   "name": "Shopify",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "seb",
-  "description": "Multi-store Shopify revenue TUI",
+  "description": "Multi-store Shopify revenue panel",
   "kinds": [
-    "tui"
+    "panel"
   ],
-  "entryPoints": {}
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
 }
