@@ -13,7 +13,6 @@ Item {
   property color mutedColor: "#565f89"
   property color textColor: "#a9b1d6"
   property color brightColor: "#c0caf5"
-  property color hintColor: "#b9f27c"
   property color warnColor: "#f7768e"
   property string fontFamily: "monospace"
 
@@ -23,29 +22,33 @@ Item {
   readonly property bool payloadOk: safePayload.ok === true
   readonly property var cells: Model.kpiCells(safePayload, metric)
   readonly property var chartBars: Model.barsFor(safePayload, metric)
+  readonly property var compareBars: Model.compareBarsFor(safePayload, metric)
+  readonly property string chartFigure: Model.chartFigure(safePayload, metric)
   readonly property string chartStyle: Model.metricById(metric).chartStyle
-  readonly property string hoverLabel: Model.chartHoverLabel(chartBars, metric, Model.currency(safePayload))
-  readonly property var channels: Model.channelRows(safePayload)
+  readonly property var channels: Model.channelCards(safePayload)
   readonly property real channelTotal: channels.total
-  readonly property int kpiHeight: (Style.font.caption + Style.font.body + Style.space(10)) * 2 + Style.space(36)
-  readonly property int channelHeight: Style.font.bodySmall * 4 + Style.space(64)
+  readonly property int kpiHeight: root.channelHeight * 2 + Style.space(16)
+  readonly property int channelHeight: Style.font.heading + Style.space(56)
 
-  Fieldset {
+  Item {
     id: kpiBox
     anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
     height: root.kpiHeight
-    number: 1
-    legend: root.title
-    borderColor: root.borderColor
-    backgroundColor: root.backgroundColor
-    mutedColor: root.mutedColor
-    hintColor: root.hintColor
-    fontFamily: root.fontFamily
-    bottomLeft: root.payloadOk ? Model.kpiHeroMeta(root.safePayload.today) : ""
-    hintKey: root.payloadOk ? "tab" : ""
-    hintRest: root.payloadOk ? "to switch" : ""
+
+    Text {
+      id: demoLabel
+      anchors.left: parent.left
+      anchors.top: parent.top
+      visible: root.title === "DEMO MODE"
+      textFormat: Text.PlainText
+      text: root.title
+      color: root.warnColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+    }
 
     Text {
       anchors.fill: parent
@@ -55,53 +58,49 @@ Item {
       wrapMode: Text.WordWrap
       color: root.warnColor
       font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.body
     }
 
     KpiGrid {
-      anchors.fill: parent
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.top: demoLabel.visible ? demoLabel.bottom : parent.top
+      anchors.topMargin: demoLabel.visible ? Style.space(6) : 0
       visible: root.payloadOk
       cells: root.cells
       accent: root.borderColor
       backgroundColor: root.backgroundColor
       mutedColor: root.mutedColor
       textColor: root.textColor
+      downColor: root.warnColor
       fontFamily: root.fontFamily
       onChosen: function(id) { root.metricChosen(id) }
     }
   }
 
-  Fieldset {
+  ChannelStats {
     id: channelBox
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     height: root.channelTotal > 0 ? root.channelHeight : 0
     visible: root.channelTotal > 0
-    number: 3
-    legend: Model.channelsTitle(root.safePayload)
+    cards: root.channels.cards
     borderColor: root.borderColor
     backgroundColor: root.backgroundColor
     mutedColor: root.mutedColor
-    hintColor: root.hintColor
+    textColor: root.textColor
+    upColor: root.borderColor
+    downColor: root.warnColor
     fontFamily: root.fontFamily
-
-    ChannelBars {
-      anchors.fill: parent
-      rows: root.channels.rows
-      accent: root.borderColor
-      bright: root.brightColor
-      mutedColor: root.mutedColor
-      textColor: root.textColor
-      fontFamily: root.fontFamily
-    }
   }
 
   Fieldset {
     anchors.top: kpiBox.bottom
-    anchors.topMargin: Style.space(10)
+    anchors.topMargin: Style.space(16)
     anchors.bottom: parent.bottom
-    anchors.bottomMargin: channelBox.visible ? channelBox.height + Style.space(10) : 0
+    anchors.bottomMargin: channelBox.visible ? channelBox.height + Style.space(16) : 0
     anchors.left: parent.left
     anchors.right: parent.right
     number: 2
@@ -109,9 +108,20 @@ Item {
     borderColor: root.borderColor
     backgroundColor: root.backgroundColor
     mutedColor: root.mutedColor
-    hintColor: root.hintColor
     fontFamily: root.fontFamily
-    bottomRight: root.hoverLabel
+
+    Text {
+      id: chartValue
+      anchors.left: parent.left
+      anchors.top: parent.top
+      visible: root.chartFigure !== ""
+      textFormat: Text.PlainText
+      text: root.chartFigure
+      color: root.textColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.display
+      font.bold: true
+    }
 
     Text {
       anchors.centerIn: parent
@@ -120,13 +130,18 @@ Item {
       text: "no data"
       color: root.mutedColor
       font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.body
     }
 
     DotChart {
-      anchors.fill: parent
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.top: chartValue.visible ? chartValue.bottom : parent.top
+      anchors.topMargin: chartValue.visible ? Style.space(6) : 0
       visible: root.chartBars && root.chartBars.length > 0
       bars: root.chartBars
+      compareBars: root.compareBars
       chartStyle: root.chartStyle
       accent: root.borderColor
       bright: root.brightColor

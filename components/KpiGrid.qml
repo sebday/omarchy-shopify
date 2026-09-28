@@ -9,69 +9,111 @@ Item {
   property color backgroundColor: "#1a1b26"
   property color mutedColor: "#565f89"
   property color textColor: "#a9b1d6"
+  property color downColor: "#f7768e"
   property string fontFamily: "monospace"
 
   signal chosen(string id)
 
-  Grid {
-    id: grid
+  function toneColor(tone) {
+    if (tone === "down") return root.downColor
+    return root.accent
+  }
+
+  function cellsForRow(row) {
+    var all = root.cells || []
+    var start = row === 0 ? 0 : 3
+    var end = row === 0 ? Math.min(3, all.length) : all.length
+    var out = []
+    for (var i = start; i < end; i++) out.push(all[i])
+    return out
+  }
+
+  Column {
+    id: stack
     anchors.fill: parent
-    columns: 5
-    columnSpacing: Style.space(8)
-    rowSpacing: Style.space(10)
+    spacing: Style.space(16)
 
     Repeater {
-      model: root.cells
+      model: 2
 
-      Item {
-        required property var modelData
+      Row {
         required property int index
 
-        width: Math.max(1, Math.floor((grid.width - grid.columnSpacing * 4) / 5))
-        height: cellCol.implicitHeight
+        readonly property var rowCells: root.cellsForRow(index)
 
-        Column {
-          id: cellCol
-          width: parent.width
-          spacing: Style.space(2)
+        width: stack.width
+        height: Math.max(1, (stack.height - stack.spacing) / 2)
+        spacing: Style.space(16)
 
-          Rectangle {
-            width: parent.width
-            height: labelText.implicitHeight + Style.space(2)
-            color: modelData.selected ? root.accent : "transparent"
+        Repeater {
+          model: parent.rowCells
 
-            Text {
-              id: labelText
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(4)
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: modelData.label
-              color: modelData.selected ? root.backgroundColor : root.mutedColor
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
+          Item {
+            required property var modelData
+
+            width: {
+              var count = parent.rowCells ? parent.rowCells.length : 1
+              var gaps = parent.spacing * Math.max(0, count - 1)
+              return Math.max(1, Math.floor((parent.width - gaps) / Math.max(1, count)))
+            }
+            height: parent.height
+
+            Fieldset {
+              anchors.fill: parent
+              legend: modelData.label
+              number: 0
+              borderColor: modelData.selected ? root.accent : root.mutedColor
+              backgroundColor: root.backgroundColor
+              mutedColor: root.mutedColor
+              fontFamily: root.fontFamily
+
+              Text {
+                id: valueText
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.right: deltaText.left
+                anchors.rightMargin: Style.space(2)
+                textFormat: Text.PlainText
+                text: modelData.value
+                color: root.textColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                font.bold: true
+                elide: Text.ElideRight
+              }
+
+              Text {
+                id: deltaText
+                anchors.right: parent.right
+                anchors.verticalCenter: valueText.verticalCenter
+                visible: modelData.delta !== ""
+                textFormat: Text.PlainText
+                text: modelData.delta
+                color: root.toneColor(modelData.tone)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Sparkline {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: valueText.bottom
+                anchors.bottom: parent.bottom
+                anchors.topMargin: Style.space(2)
+                visible: modelData.spark && modelData.spark.length > 1
+                points: modelData.spark || []
+                strokeColor: root.accent
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: modelData.clickable === true
+              cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+              onClicked: root.chosen(modelData.id)
             }
           }
-
-          Text {
-            width: parent.width
-            textFormat: Text.PlainText
-            text: modelData.value
-            horizontalAlignment: Text.AlignRight
-            rightPadding: Style.space(4)
-            color: root.textColor
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-        }
-
-        MouseArea {
-          anchors.fill: parent
-          enabled: modelData.clickable === true
-          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-          onClicked: root.chosen(modelData.id)
         }
       }
     }

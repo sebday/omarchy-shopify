@@ -46,7 +46,7 @@ o.rebind("SUPER + SHIFT + S", "Shopify", { panel = "evo.shopify" })
 
 On each refresh `shopify-status` posts `/v1/sync/today` (1-day Shopify/Ads/GA4, at most every 4 minutes), then reads `GET /v1/sites/:site/kpi/summary`. Stores come from `GET /v1/sites` when `stores` is omitted.
 
-Store borders follow the current Omarchy theme: cyan, bright green, blue, yellow, magenta. DIY is cyan and TGS is bright green.
+Store borders follow the current Omarchy theme: cyan, bright green, blue, yellow, magenta. DIY is cyan and TGS is blue.
 
 ## Panel
 

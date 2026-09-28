@@ -41,7 +41,6 @@ Item {
   readonly property color colText: Model.pickColor(palette.foreground, Color.foreground)
   readonly property color colMuted: Model.pickColor(palette.muted, Color.muted)
   readonly property color colBright: Model.pickColor(palette.bright_foreground, Color.foreground)
-  readonly property color colHint: Model.pickColor(palette.bright_green, "#b9f27c")
   readonly property color colWarn: Color.urgent
   readonly property color fallbackAccent: Color.accent
 
@@ -510,7 +509,7 @@ Item {
           text: root.loading ? "Loading…" : (root.errorText || "No stores")
           color: root.loading ? root.colMuted : root.colWarn
           font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          font.pixelSize: Style.font.subtitle
           horizontalAlignment: Text.AlignHCenter
         }
 
@@ -525,7 +524,7 @@ Item {
           text: "Set shopify.apiUrl and pass show omarchy/ecommerce-data/api-token."
           color: root.colMuted
           font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
+          font.pixelSize: Style.font.body
           horizontalAlignment: Text.AlignHCenter
         }
 
@@ -552,7 +551,6 @@ Item {
               mutedColor: root.colMuted
               textColor: root.colText
               brightColor: root.colBright
-              hintColor: root.colHint
               warnColor: root.colWarn
               fontFamily: root.fontFamily
               onMetricChosen: function(id) { root.chooseMetric(id) }

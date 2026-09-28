@@ -5,12 +5,12 @@ var MAX_BARS = 400
 var MAX_TEXT = 80
 
 var KPI_ORDER = [
-  "revenue", "orders", "sessions", "cvr", "aov",
-  "cos", "spend", "periodPrev", "periodRevenue", "forecast"
+  "revenue", "orders", "cos", "cvr", "aov",
+  "sessions", "spend"
 ]
 
 var CHARTS = {
-  revenue: { id: "revenue", label: "revenue", valueKind: "currency", chartStyle: "bar" },
+  revenue: { id: "revenue", label: "revenue", valueKind: "currency", chartStyle: "line" },
   orders: { id: "orders", label: "orders", valueKind: "integer", chartStyle: "bar" },
   sessions: { id: "sessions", label: "sessions", valueKind: "integer", chartStyle: "line" },
   cvr: { id: "cvr", label: "CVR", valueKind: "percent", chartStyle: "line" },
@@ -22,7 +22,7 @@ var CHARTS = {
   forecast: { id: "forecast", label: "forecast", valueKind: "currency", chartStyle: "bar" }
 }
 
-var STORE_COLOR_NAMES = { DIY: "cyan", TGS: "bright_green" }
+var STORE_COLOR_NAMES = { DIY: "cyan", TGS: "blue" }
 var STORE_COLOR_FALLBACK = ["cyan", "bright_green", "blue", "yellow", "magenta"]
 var COLOR_KEYS = [
   "cyan", "bright_green", "blue", "yellow", "magenta",
@@ -98,7 +98,21 @@ function storeColor(key, index, colors, fallback) {
 }
 
 function emptyChannels() {
-  return { paid: 0, organic: 0, direct: 0, email: 0 }
+  return {
+    paid: 0, organic: 0, direct: 0, email: 0,
+    prevPaid: null, prevOrganic: null, prevDirect: null, prevEmail: null
+  }
+}
+
+function emptyChannelBars() {
+  return { paid: [], organic: [], direct: [], email: [] }
+}
+
+function emptyPrevDaily() {
+  return {
+    revenue: [], orders: [], sessions: [], spend: [],
+    cvr: [], aov: [], cos: []
+  }
 }
 
 function emptyPayload() {
@@ -107,8 +121,10 @@ function emptyPayload() {
     error: "No data",
     symbol: "£",
     today: { date: "", calendarDate: "", revenue: 0, orders: 0, sessions: 0, cos: "", spend: null, cvr: null },
-    period: { days: 0, revenue: 0, prevRevenue: 0 },
+    period: { days: 0, revenue: 0, prevRevenue: 0, orders: 0, sessions: 0, spend: 0 },
     channels: emptyChannels(),
+    channelBars: emptyChannelBars(),
+    prevDaily: emptyPrevDaily(),
     month: { forecastRevenue: 0 },
     bars: [],
     orderBars: [],
@@ -155,6 +171,24 @@ function normalizePayload(json) {
 
   var today = json.todayDetail && typeof json.todayDetail === "object" ? json.todayDetail : {}
   var period = json.period && typeof json.period === "object" ? json.period : {}
+  var channelBarsIn = json.channelBars && typeof json.channelBars === "object" ? json.channelBars : {}
+  var paidBars = barsOf(channelBarsIn.paid)
+  var organicBars = barsOf(channelBarsIn.organic)
+  var directBars = barsOf(channelBarsIn.direct)
+  var emailBars = barsOf(channelBarsIn.email)
+  if (!paidBars || !organicBars || !directBars || !emailBars) return empty
+
+  var prevIn = json.prevDaily && typeof json.prevDaily === "object" ? json.prevDaily : {}
+  var prevRevenue = barsOf(prevIn.revenue)
+  var prevOrders = barsOf(prevIn.orders)
+  var prevSessions = barsOf(prevIn.sessions)
+  var prevSpend = barsOf(prevIn.spend)
+  var prevCvr = barsOf(prevIn.cvr)
+  var prevAov = barsOf(prevIn.aov)
+  var prevCos = barsOf(prevIn.cos)
+  if (!prevRevenue || !prevOrders || !prevSessions || !prevSpend || !prevCvr || !prevAov || !prevCos)
+    return empty
+
   var channels = json.channels && typeof json.channels === "object" ? json.channels : {}
   var month = json.month && typeof json.month === "object" ? json.month : {}
   var days = intOf(period.days)
@@ -181,13 +215,35 @@ function normalizePayload(json) {
     period: {
       days: days,
       revenue: finite(period.revenue) || 0,
-      prevRevenue: finite(period.prevRevenue) || 0
+      prevRevenue: finite(period.prevRevenue) || 0,
+      orders: Math.max(0, intOf(period.orders)),
+      sessions: Math.max(0, intOf(period.sessions)),
+      spend: finite(period.spend) || 0
     },
     channels: {
       paid: Math.max(0, finite(channels.paid) || 0),
       organic: Math.max(0, finite(channels.organic) || 0),
       direct: Math.max(0, finite(channels.direct) || 0),
-      email: Math.max(0, finite(channels.email) || 0)
+      email: Math.max(0, finite(channels.email) || 0),
+      prevPaid: finiteOrNull(channels.prevPaid),
+      prevOrganic: finiteOrNull(channels.prevOrganic),
+      prevDirect: finiteOrNull(channels.prevDirect),
+      prevEmail: finiteOrNull(channels.prevEmail)
+    },
+    channelBars: {
+      paid: paidBars,
+      organic: organicBars,
+      direct: directBars,
+      email: emailBars
+    },
+    prevDaily: {
+      revenue: prevRevenue,
+      orders: prevOrders,
+      sessions: prevSessions,
+      spend: prevSpend,
+      cvr: prevCvr,
+      aov: prevAov,
+      cos: prevCos
     },
     month: { forecastRevenue: Math.max(0, finite(month.forecastRevenue) || 0) },
     bars: bars,
@@ -337,11 +393,68 @@ function barsFor(payload, id) {
   return p.bars
 }
 
+function prevBarsFor(payload, id) {
+  var p = asPayload(payload)
+  var prev = p.prevDaily || emptyPrevDaily()
+  if (id === "orders") return prev.orders
+  if (id === "sessions") return prev.sessions
+  if (id === "cvr") return prev.cvr
+  if (id === "aov") return prev.aov
+  if (id === "cos") return prev.cos
+  if (id === "spend") return prev.spend
+  return prev.revenue
+}
+
+function utcDay(dateStr) {
+  var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""))
+  if (!match) return NaN
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+}
+
+function weekdayAlign(current, previous) {
+  var prev = (previous || []).slice()
+  prev.sort(function(a, b) {
+    return String(a && a.date || "").localeCompare(String(b && b.date || ""))
+  })
+  var out = []
+  if (!current || !current.length || !prev.length) return out
+  var currentStart = utcDay(current[0] && current[0].date)
+  var prevStart = utcDay(prev[0] && prev[0].date)
+  if (!isFinite(currentStart) || !isFinite(prevStart)) return out
+  var shift = (new Date(currentStart).getUTCDay() - new Date(prevStart).getUTCDay() + 7) % 7
+  for (var i = 0; i < current.length; i++) {
+    var src = prev[i + shift]
+    var value = src && typeof src.value === "number" ? src.value : null
+    out.push({ date: current[i] && current[i].date || "", value: value })
+  }
+  return out
+}
+
+function compareBarsFor(payload, id) {
+  return weekdayAlign(barsFor(payload, id), prevBarsFor(payload, id))
+}
+
+function chartFigure(payload, metricId) {
+  var p = asPayload(payload)
+  var cur = currency(p)
+  var period = p.period
+  if (metricId === "revenue") return formatRevenue(period.revenue, cur)
+  if (metricId === "orders") return formatInt(period.orders)
+  if (metricId === "sessions") return formatInt(period.sessions)
+  if (metricId === "spend") return formatMoney(period.spend, cur)
+  if (metricId === "aov")
+    return period.orders > 0 ? formatMoney(period.revenue / period.orders, cur) : "—"
+  if (metricId === "cos")
+    return period.revenue > 0 ? formatPct(period.spend / period.revenue) : "—"
+  if (metricId === "cvr")
+    return period.sessions > 0 ? formatPct(period.orders / period.sessions) : "—"
+  return ""
+}
+
 function metricClickable(payload, id) {
   var p = asPayload(payload)
   if (!p.ok) return false
-  if (id === "periodPrev" || id === "periodRevenue" || id === "forecast")
-    return p.bars.length > 0
+  if (KPI_ORDER.indexOf(id) < 0) return false
   return barsFor(p, id).length > 0
 }
 
@@ -359,22 +472,32 @@ function nextMetric(payload, current, dir) {
   return current
 }
 
-function chartHoverLabel(bars, id, symbol) {
-  if (!bars || !bars.length) return ""
-  var last = bars[bars.length - 1]
-  var day = formatDay(last.date)
-  var def = metricById(id)
-  var value
-  if (def.valueKind === "integer") value = formatInt(Math.round(last.value))
-  else if (def.valueKind === "percent") value = formatPct(last.value)
-  else value = formatRevenue(last.value, symbol)
-  return day ? (day + "  " + value) : value
-}
-
 function periodDays(p) {
   if (p.period.days > 0) return p.period.days
   if (p.bars.length > 0) return p.bars.length
   return 30
+}
+
+function seriesDelta(series) {
+  if (!series || series.length < 2) return null
+  var last = series[series.length - 1]
+  var current = last && last.value
+  if (typeof current !== "number" || !isFinite(current)) return null
+  var previous = null
+  var target = utcDay(last && last.date)
+  if (isFinite(target)) {
+    var weekAgo = target - 7 * 86400000
+    for (var i = 0; i < series.length; i++) {
+      if (utcDay(series[i] && series[i].date) === weekAgo) {
+        previous = series[i].value
+        break
+      }
+    }
+  } else if (series.length > 7) {
+    previous = series[series.length - 8].value
+  }
+  if (typeof previous !== "number" || !isFinite(previous)) return null
+  return pctDelta(current, previous)
 }
 
 function kpiCells(payload, metricId) {
@@ -382,27 +505,28 @@ function kpiCells(payload, metricId) {
   if (!p.ok) return []
   var cur = currency(p)
   var d = p.today
-  var days = periodDays(p)
-  var forecast = p.month.forecastRevenue > 0 ? formatRevenue(p.month.forecastRevenue, cur) : "—"
   var specs = [
-    ["revenue", "◆", "Rev.", formatRevenue(d.revenue, cur)],
-    ["orders", "⧉", "Orders", formatInt(d.orders)],
-    ["sessions", "◎", "Sess.", formatInt(d.sessions)],
-    ["cvr", "%", "CvR", formatPct(d.cvr)],
-    ["aov", "⊕", "AoV", formatAov(d, cur)],
-    ["cos", "◐", "CoS", dashIfEmpty(d.cos)],
-    ["spend", "▸", "Spend", formatMoney(d.spend, cur)],
-    ["periodPrev", "▤", days + "d Prev", formatRevenue(p.period.prevRevenue, cur)],
-    ["periodRevenue", "▤", days + "d Rev", formatRevenue(p.period.revenue, cur)],
-    ["forecast", "⌁", "Fcast", forecast]
+    ["revenue", "Rev.", formatRevenue(d.revenue, cur), sparkValues(barsFor(p, "revenue")), seriesDelta(barsFor(p, "revenue"))],
+    ["orders", "Orders", formatInt(d.orders), sparkValues(barsFor(p, "orders")), seriesDelta(barsFor(p, "orders"))],
+    ["cos", "CoS", dashIfEmpty(d.cos), sparkValues(barsFor(p, "cos")), seriesDelta(barsFor(p, "cos"))],
+    ["cvr", "CvR", formatPct(d.cvr), sparkValues(barsFor(p, "cvr")), seriesDelta(barsFor(p, "cvr"))],
+    ["aov", "AoV", formatAov(d, cur), sparkValues(barsFor(p, "aov")), seriesDelta(barsFor(p, "aov"))],
+    ["sessions", "Sess.", formatInt(d.sessions), sparkValues(barsFor(p, "sessions")), seriesDelta(barsFor(p, "sessions"))],
+    ["spend", "Spend", formatMoney(d.spend, cur), sparkValues(barsFor(p, "spend")), seriesDelta(barsFor(p, "spend"))]
   ]
   var out = []
   for (var i = 0; i < specs.length; i++) {
     var spec = specs[i]
+    var delta = spec[4]
+    var tone = "up"
+    if (delta !== null && Math.abs(delta) >= 0.05) tone = delta > 0 ? "up" : "down"
     out.push({
       id: spec[0],
-      label: spec[1] + " " + spec[2],
-      value: spec[3],
+      label: spec[1],
+      value: spec[2],
+      spark: spec[3],
+      delta: formatDelta(delta),
+      tone: tone,
       selected: spec[0] === metricId,
       clickable: metricClickable(p, spec[0])
     })
@@ -410,27 +534,57 @@ function kpiCells(payload, metricId) {
   return out
 }
 
-function channelRows(payload) {
+function pctDelta(current, previous) {
+  if (previous === null || previous === undefined || !isFinite(previous)) return null
+  if (Math.abs(previous) < 1e-9) return null
+  if (!isFinite(current)) return null
+  return ((current - previous) / previous) * 100
+}
+
+function formatDelta(delta) {
+  if (delta === null || !isFinite(delta)) return ""
+  var sign = delta > 0 ? "+" : ""
+  return sign + delta.toFixed(1) + "%"
+}
+
+function sparkValues(series) {
+  if (!series || !series.length) return []
+  var out = []
+  for (var i = 0; i < series.length; i++) {
+    var v = series[i] && series[i].value
+    out.push(typeof v === "number" && isFinite(v) ? v : 0)
+  }
+  return out
+}
+
+function channelCards(payload) {
   var p = asPayload(payload)
   var cur = currency(p)
-  var ch = p.channels
-  var total = ch.paid + ch.organic + ch.direct + ch.email
-  function row(label, value) {
-    return {
-      label: label,
-      share: total > 0 ? value / total : 0,
-      text: formatRevenue(value, cur)
-    }
+  var ch = p.channels || emptyChannels()
+  var bars = p.channelBars || emptyChannelBars()
+  var specs = [
+    ["Paid revenue", ch.paid, ch.prevPaid, bars.paid],
+    ["Organic revenue", ch.organic, ch.prevOrganic, bars.organic],
+    ["Direct revenue", ch.direct, ch.prevDirect, bars.direct],
+    ["Email revenue", ch.email, ch.prevEmail, bars.email]
+  ]
+  var total = 0
+  var cards = []
+  for (var i = 0; i < specs.length; i++) {
+    var value = finite(specs[i][1]) || 0
+    total += value
+    var delta = pctDelta(value, specs[i][2])
+    var tone = "flat"
+    if (delta !== null && Math.abs(delta) >= 0.05) tone = delta > 0 ? "up" : "down"
+    cards.push({
+      label: specs[i][0],
+      value: formatRevenue(value, cur),
+      delta: formatDelta(delta),
+      tone: tone,
+      spark: sparkValues(specs[i][3])
+    })
   }
-  return {
-    total: total,
-    rows: [
-      row("Paid", ch.paid),
-      row("Organic", ch.organic),
-      row("Direct", ch.direct),
-      row("Email", ch.email)
-    ]
-  }
+  return { total: total, cards: cards }
 }
 
 function chartTitle(payload, metricId) {
@@ -439,6 +593,3 @@ function chartTitle(payload, metricId) {
   return periodDays(p) + " day " + def.label
 }
 
-function channelsTitle(payload) {
-  return "channels " + periodDays(asPayload(payload)) + " days"
-}

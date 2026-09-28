@@ -7,14 +7,11 @@ Item {
   property string legend: ""
   property int number: 0
   property color borderColor: "#89dceb"
+  property color legendColor: borderColor
   property color backgroundColor: "#1a1b26"
   property color mutedColor: "#565f89"
-  property color hintColor: "#b9f27c"
   property string fontFamily: "monospace"
   property string bottomLeft: ""
-  property string bottomRight: ""
-  property string hintKey: ""
-  property string hintRest: ""
 
   default property alias contentData: body.data
 
@@ -55,7 +52,7 @@ Item {
         id: numText
         textFormat: Text.PlainText
         text: root.sup(root.number)
-        color: root.borderColor
+        color: root.legendColor
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.bold: true
@@ -65,7 +62,7 @@ Item {
         id: legendText
         textFormat: Text.PlainText
         text: root.legend
-        color: root.borderColor
+        color: root.legendColor
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: true
@@ -98,61 +95,6 @@ Item {
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
       font.bold: true
-    }
-  }
-
-  Item {
-    id: rightChip
-    anchors.right: parent.right
-    anchors.rightMargin: Style.space(14)
-    anchors.bottom: parent.bottom
-    anchors.bottomMargin: -height / 2
-    width: rightRow.width + Style.space(8)
-    height: Math.max(hintKeyText.implicitHeight, rightText.implicitHeight, hintRestText.implicitHeight)
-    visible: root.hintKey !== "" || root.bottomRight !== ""
-
-    Rectangle {
-      anchors.fill: parent
-      color: root.backgroundColor
-    }
-
-    Row {
-      id: rightRow
-      x: Style.space(4)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(4)
-
-      Text {
-        id: hintKeyText
-        visible: root.hintKey !== ""
-        textFormat: Text.PlainText
-        text: root.hintKey
-        color: root.hintColor
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
-      }
-
-      Text {
-        id: hintRestText
-        visible: root.hintKey !== ""
-        textFormat: Text.PlainText
-        text: root.hintRest
-        color: root.mutedColor
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-
-      Text {
-        id: rightText
-        visible: root.hintKey === ""
-        textFormat: Text.PlainText
-        text: root.bottomRight
-        color: root.borderColor
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
-      }
     }
   }
 

@@ -5,6 +5,7 @@ Canvas {
   id: root
 
   property var bars: []
+  property var compareBars: []
   property string chartStyle: "bar"
   property color accent: "#89dceb"
   property color bright: "#c0caf5"
@@ -31,6 +32,7 @@ Canvas {
 
   function maxValue(series) {
     var maxV = 0
+    if (!series) return maxV
     for (var i = 0; i < series.length; i++) {
       var v = series[i] && series[i].value
       if (typeof v === "number" && v > maxV) maxV = v
@@ -38,15 +40,59 @@ Canvas {
     return maxV
   }
 
-  function paintBar(ctx, series, w, h) {
+  function resampleAligned(series, count) {
+    if (!series || count < 1) return []
+    if (series.length === count) return series
+    if (series.length === 0) return []
+    var out = []
+    var denom = count - 1
+    for (var j = 0; j < count; j++) {
+      var src = series.length === 1 ? 0 : Math.round(j * (series.length - 1) / denom)
+      if (src >= series.length) src = series.length - 1
+      out.push(series[src])
+    }
+    return out
+  }
+
+  function paintCompare(ctx, series, w, h, maxV) {
+    if (!series || series.length < 2 || maxV <= 0) return
+    var n = series.length
+    var plotH = Math.max(4, h - 6)
+    var pts = []
+    for (var i = 0; i < n; i++) {
+      var value = series[i] && series[i].value
+      if (typeof value !== "number") {
+        pts.push(null)
+        continue
+      }
+      var x = n === 1 ? w / 2 : (i / (n - 1)) * (w - 4) + 2
+      var y = (plotH - 2) - (value / maxV) * (plotH - 4)
+      pts.push({ x: x, y: y })
+    }
+    ctx.fillStyle = root.muted
+    for (var p = 1; p < pts.length; p++) {
+      var a = pts[p - 1]
+      var b = pts[p]
+      if (!a || !b) continue
+      var dist = Math.hypot(b.x - a.x, b.y - a.y)
+      var steps = Math.max(1, Math.floor(dist / 5))
+      for (var s = 0; s <= steps; s++) {
+        var t = s / steps
+        ctx.globalAlpha = 0.55
+        ctx.beginPath()
+        ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 1.05, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    ctx.globalAlpha = 1
+  }
+
+  function paintBar(ctx, series, w, h, maxV) {
     if (!series || series.length < 1 || w < 4 || h < 4) return
-    var maxBars = Math.max(1, Math.floor(w / 3))
-    if (series.length > maxBars) series = root.resample(series, maxBars)
     var n = series.length
     var slot = w / n
     var plotH = h
     var step = Math.max(3, Math.min(5, Math.floor(h / 48)))
-    var maxV = root.maxValue(series)
 
     if (n > 1 && slot > 6) {
       ctx.fillStyle = root.muted
@@ -82,15 +128,12 @@ Canvas {
     ctx.globalAlpha = 1
   }
 
-  function paintLine(ctx, series, w, h) {
-    var maxPts = Math.max(2, Math.floor(w / 6))
-    if (series.length > maxPts) series = root.resample(series, maxPts)
+  function paintLine(ctx, series, w, h, maxV) {
     var n = series.length
     ctx.globalAlpha = 0.55
     ctx.fillStyle = root.muted
     ctx.fillRect(0, h - 3, w, 2)
     ctx.globalAlpha = 1
-    var maxV = root.maxValue(series)
     if (maxV <= 0 || n < 1) return
     var plotH = Math.max(4, h - 6)
     var pts = []
@@ -126,6 +169,7 @@ Canvas {
   antialiasing: true
 
   onBarsChanged: requestPaint()
+  onCompareBarsChanged: requestPaint()
   onChartStyleChanged: requestPaint()
   onAccentChanged: requestPaint()
   onBrightChanged: requestPaint()
@@ -142,7 +186,17 @@ Canvas {
     ctx.clearRect(0, 0, width, height)
     if (width < 4 || height < 4) return
     var series = root.bars || []
-    if (root.chartStyle === "line") root.paintLine(ctx, series, width, height)
-    else root.paintBar(ctx, series, width, height)
+    var compare = root.compareBars || []
+    var maxPts = Math.max(2, Math.floor(width / 6))
+    if (series.length > maxPts) {
+      compare = root.resampleAligned(compare, maxPts)
+      series = root.resample(series, maxPts)
+    } else if (compare.length !== series.length) {
+      compare = root.resampleAligned(compare, series.length)
+    }
+    var maxV = Math.max(root.maxValue(series), root.maxValue(compare))
+    if (root.chartStyle === "line") root.paintLine(ctx, series, width, height, maxV)
+    else root.paintBar(ctx, series, width, height, maxV)
+    root.paintCompare(ctx, compare, width, height, maxV)
   }
 }

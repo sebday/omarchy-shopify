@@ -168,7 +168,8 @@ api_ready() {
 }
 
 summary_to_store_payload() {
-    jq -c '
+    local channel_daily=${2:-'{"rows":[]}'}
+    jq -c --argjson channelDaily "$channel_daily" '
       def num($v): ($v // 0) | tonumber? // 0;
       def money($v): ((num($v) * 100) | round) / 100;
       def is_leap($y): ($y % 4 == 0) and (($y % 100 != 0) or ($y % 400 == 0));
@@ -181,6 +182,8 @@ summary_to_store_payload() {
         if $max <= 0 or $v <= 0 then 0
         else (($v / $max * 4) | floor | if . > 4 then 4 elif . < 1 then 1 else . end)
         end;
+      def sumkey($rows; $key): ([$rows[] | money(.[$key])] | add // 0);
+      def spark($rows; $key): [$rows[] | { date: (.dt // ""), value: money(.[$key]) }];
       def series($daily; $values; $orders):
         ($values | map(num(.)) | max // 0) as $max
         | [range(0; $daily | length)]
@@ -199,6 +202,10 @@ summary_to_store_payload() {
           );
 
       (.daily // []) as $daily
+      | (.from // "") as $curFrom
+      | ($channelDaily.rows // []) as $factRows
+      | [ $factRows[] | select($curFrom != "" and (.dt // "") >= $curFrom) ] as $curFacts
+      | [ $factRows[] | select($curFrom != "" and (.dt // "") != "" and (.dt // "") < $curFrom) ] as $prevFacts
       | (.to // ($daily[-1].dt // "")) as $to
       | (($daily | map(select(.dt == $to)) | last) // $daily[-1] // {}) as $today
       | ($to[0:7]) as $month
@@ -228,12 +235,37 @@ summary_to_store_payload() {
             sessions: num(.period.sessions),
             spend: money(.period.spend)
           },
-          channels: (.channels // {
-            paid: 0,
-            organic: 0,
-            direct: 0,
-            email: 0
-          }),
+          channels: {
+            paid: money(.channels.paid),
+            organic: money(.channels.organic),
+            direct: money(.channels.direct),
+            email: money(.channels.email),
+            prevPaid: (if ($prevFacts | length) == 0 then null else sumkey($prevFacts; "paid_revenue") end),
+            prevOrganic: (if ($prevFacts | length) == 0 then null else sumkey($prevFacts; "organic_revenue") end),
+            prevDirect: (if ($prevFacts | length) == 0 then null else sumkey($prevFacts; "direct_revenue") end),
+            prevEmail: (if ($prevFacts | length) == 0 then null else sumkey($prevFacts; "email_revenue") end)
+          },
+          channelBars: {
+            paid: spark($curFacts; "paid_revenue"),
+            organic: spark($curFacts; "organic_revenue"),
+            direct: spark($curFacts; "direct_revenue"),
+            email: spark($curFacts; "email_revenue")
+          },
+          prevDaily: {
+            revenue: spark($prevFacts; "revenue"),
+            orders: [$prevFacts[] | { date: (.dt // ""), value: num(.orders) }],
+            sessions: [$prevFacts[] | { date: (.dt // ""), value: num(.sessions) }],
+            spend: spark($prevFacts; "google_spend"),
+            cvr: [$prevFacts[] | { date: (.dt // ""), value: num(.cvr) }],
+            aov: [$prevFacts[] | {
+              date: (.dt // ""),
+              value: (if num(.orders) > 0 then money(num(.revenue) / num(.orders)) else 0 end)
+            }],
+            cos: [$prevFacts[] | {
+              date: (.dt // ""),
+              value: (if num(.revenue) > 0 then (num(.google_spend) / num(.revenue)) else 0 end)
+            }]
+          },
           month: {
             mtdRevenue: money($mtd),
             forecastRevenue: money(.forecast),
@@ -264,7 +296,14 @@ fetch_store_snapshot_api() {
     from=$(TZ="$tz_name" date -d "$to - $((days - 1)) days" +%F)
     url="${API_URL}/v1/sites/${site_key}/kpi/summary?from=${from}&to=${to}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
     payload=$(evo_worker_curl "$url") || return 1
-    payload=$(summary_to_store_payload "$payload") || return 1
+    local prev_from daily_url channel_daily channel_body
+    prev_from=$(TZ="$tz_name" date -d "$from - ${days} days" +%F)
+    daily_url="${API_URL}/v1/sites/${site_key}/kpi/daily?from=${prev_from}&to=${to}"
+    channel_daily='{"rows":[]}'
+    if channel_body=$(evo_worker_curl "$daily_url") && jq -e 'type == "object"' >/dev/null 2>&1 <<<"$channel_body"; then
+        channel_daily=$channel_body
+    fi
+    payload=$(summary_to_store_payload "$payload" "$channel_daily") || return 1
     payload_is_ok "$payload" || return 1
     printf '%s' "$payload"
 }
