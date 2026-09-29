@@ -518,8 +518,10 @@ function kpiCells(payload, metricId) {
   for (var i = 0; i < specs.length; i++) {
     var spec = specs[i]
     var delta = spec[4]
+    var higherIsWorse = spec[0] === "cos" || spec[0] === "spend"
     var tone = "up"
-    if (delta !== null && Math.abs(delta) >= 0.05) tone = delta > 0 ? "up" : "down"
+    if (delta !== null && Math.abs(delta) >= 0.05)
+      tone = (higherIsWorse ? delta > 0 : delta < 0) ? "down" : "up"
     out.push({
       id: spec[0],
       label: spec[1],
