@@ -8,7 +8,10 @@ import "Model.js" as Model
 import "components"
 
 // Standalone panel. The shell mounts this while it is open and calls open/close.
-// FileView only watches the theme and shell config. Bytes are read by bin/panel-config.
+// Theme switches delete and replace current/theme, then push the new palette
+// through shell IPC. A watch on colors.toml dies with the old file, so the
+// chrome follows Color and the store colours reload from theme.name, which
+// is rewritten in place after the new directory is there. panel-config reads the bytes.
 Item {
   id: root
 
@@ -33,15 +36,15 @@ Item {
   property var palette: ({})
 
   readonly property string fontFamily: Style.font.resolvedFamily || Style.font.family
-  readonly property color colBg: Model.pickColor(palette.background, Color.background)
-  readonly property color colText: Model.pickColor(palette.foreground, Color.foreground)
-  readonly property color colMuted: Model.pickColor(palette.muted, Color.muted)
+  readonly property color colBg: Color.background
+  readonly property color colText: Color.foreground
+  readonly property color colMuted: Color.muted
   readonly property color colBright: Model.pickColor(palette.bright_foreground, Color.foreground)
   readonly property color colWarn: Color.urgent
   readonly property color fallbackAccent: Color.accent
 
   readonly property string homeDir: Quickshell.env("HOME") || ""
-  readonly property string themePath: homeDir + "/.local/state/omarchy/current/theme/colors.toml"
+  readonly property string themeNamePath: homeDir + "/.local/state/omarchy/current/theme.name"
   readonly property string shellConfigPath: {
     var custom = Quickshell.env("OMARCHY_SHELL_CONFIG") || ""
     return custom !== "" ? custom : (homeDir + "/.config/omarchy/shell.json")
@@ -377,7 +380,7 @@ Item {
   }
 
   FileView {
-    path: root.themePath
+    path: root.themeNamePath
     preload: false
     blockAllReads: true
     watchChanges: true
@@ -392,6 +395,16 @@ Item {
     watchChanges: true
     printErrors: false
     onFileChanged: root.loadConfig()
+  }
+
+  // Store border colours are not on the Color singleton. Re-read them when
+  // the shell applies a theme, which is after colors.toml is in place.
+  Connections {
+    target: Color
+    function onBackgroundChanged() { root.loadConfig() }
+    function onForegroundChanged() { root.loadConfig() }
+    function onAccentChanged() { root.loadConfig() }
+    function onMutedChanged() { root.loadConfig() }
   }
 
   FloatingWindow {
