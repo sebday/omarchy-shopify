@@ -6,9 +6,12 @@
   "author": "seb",
   "description": "Multi-store Shopify revenue panel",
   "kinds": [
-    "panel"
+    "panel",
+    "service"
   ],
+  "keepLoaded": true,
   "entryPoints": {
-    "panel": "Panel.qml"
+    "panel": "Panel.qml",
+    "service": "Service.qml"
   }
 }
