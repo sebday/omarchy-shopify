@@ -169,7 +169,8 @@ api_ready() {
 
 summary_to_store_payload() {
     local channel_daily=${2:-'{"rows":[]}'}
-    jq -c --argjson channelDaily "$channel_daily" '
+    local calendar_today=${3:-}
+    jq -c --argjson channelDaily "$channel_daily" --arg calendarToday "$calendar_today" '
       def num($v): ($v // 0) | tonumber? // 0;
       def money($v): ((num($v) * 100) | round) / 100;
       def is_leap($y): ($y % 4 == 0) and (($y % 100 != 0) or ($y % 400 == 0));
@@ -203,12 +204,33 @@ summary_to_store_payload() {
 
       (.daily // []) as $daily
       | (.from // "") as $curFrom
+      | (.to // ($daily[-1].dt // "")) as $periodTo
       | ($channelDaily.rows // []) as $factRows
-      | [ $factRows[] | select($curFrom != "" and (.dt // "") >= $curFrom) ] as $curFacts
+      | [ $factRows[]
+          | select($curFrom != "" and (.dt // "") >= $curFrom and ($periodTo == "" or (.dt // "") <= $periodTo))
+        ] as $curFacts
       | [ $factRows[] | select($curFrom != "" and (.dt // "") != "" and (.dt // "") < $curFrom) ] as $prevFacts
-      | (.to // ($daily[-1].dt // "")) as $to
-      | (($daily | map(select(.dt == $to)) | last) // $daily[-1] // {}) as $today
-      | ($to[0:7]) as $month
+      | ([ $factRows[] | select($calendarToday != "" and (.dt // "") == $calendarToday) ] | last) as $liveRow
+      | (($daily | map(select(.dt == $periodTo)) | last) // $daily[-1] // {}) as $periodEnd
+      | (
+          if $liveRow == null then $periodEnd
+          else
+            (num($liveRow.revenue)) as $rev
+            | (num($liveRow.orders)) as $ord
+            | (num($liveRow.sessions)) as $ses
+            | (num($liveRow.google_spend)) as $spend
+            | {
+                dt: ($liveRow.dt // $calendarToday),
+                revenue: $rev,
+                orders: $ord,
+                sessions: $ses,
+                spend: $spend,
+                cvr: (if $ses > 0 then ($ord / $ses) else num($liveRow.cvr) end),
+                cos_pct: (if $rev > 0 then (((($spend / $rev) * 1000) | round) / 10) else 0 end)
+              }
+          end
+        ) as $today
+      | ($periodTo[0:7]) as $month
       | ([ $daily[] | select((.dt // "")[0:7] == $month) | num(.revenue) ] | add // 0) as $mtd
       | (num($today.cos_pct) | tostring) as $cos_num
       | (if $cos_num == "0" then "0%" else ($cos_num + "%") end) as $cos_str
@@ -218,8 +240,8 @@ summary_to_store_payload() {
           cos: $cos_str,
           revenue: money($today.revenue),
           todayDetail: {
-            date: ($today.dt // $to),
-            calendarDate: $to,
+            date: ($today.dt // $periodTo),
+            calendarDate: (if $calendarToday != "" then $calendarToday else $periodTo end),
             revenue: money($today.revenue),
             orders: num($today.orders),
             sessions: num($today.sessions),
@@ -269,8 +291,8 @@ summary_to_store_payload() {
           month: {
             mtdRevenue: money($mtd),
             forecastRevenue: money(.forecast),
-            day: (if $to[8:10] then ($to[8:10] | tonumber) else 0 end),
-            daysInMonth: (if $to != "" then days_in_month($to) else 0 end)
+            day: (if $periodTo[8:10] then ($periodTo[8:10] | tonumber) else 0 end),
+            daysInMonth: (if $periodTo != "" then days_in_month($periodTo) else 0 end)
           },
           bars: series($daily; [$daily[] | money(.revenue)]; [$daily[].orders]),
           orderBars: series($daily; [$daily[].orders]; [$daily[].orders]),
@@ -285,25 +307,27 @@ summary_to_store_payload() {
 
 fetch_store_snapshot_api() {
     local site_key=$1 days=$2 tz_name=$3
-    local to from url payload
+    local calendar_today finished_to from url payload
     site_key=$(printf '%s' "$site_key" | tr '[:upper:]' '[:lower:]')
     tz_name="${tz_name// /}"
     [[ -z "$tz_name" ]] && tz_name="$DEFAULT_TZ"
     if ! [[ "$days" =~ ^[0-9]+$ ]] || (( days < 1 )); then
         days=14
     fi
-    to=$(TZ="$tz_name" date +%F)
-    from=$(TZ="$tz_name" date -d "$to - $((days - 1)) days" +%F)
-    url="${API_URL}/v1/sites/${site_key}/kpi/summary?from=${from}&to=${to}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
+    # Shopify "last 30 days" is the last 30 finished days, ending yesterday.
+    calendar_today=$(TZ="$tz_name" date +%F)
+    finished_to=$(TZ="$tz_name" date -d "${calendar_today} - 1 day" +%F)
+    from=$(TZ="$tz_name" date -d "${finished_to} - $((days - 1)) days" +%F)
+    url="${API_URL}/v1/sites/${site_key}/kpi/summary?from=${from}&to=${finished_to}&tz=$(printf '%s' "$tz_name" | jq -sRr @uri)"
     payload=$(evo_worker_curl "$url") || return 1
     local prev_from daily_url channel_daily channel_body
-    prev_from=$(TZ="$tz_name" date -d "$from - ${days} days" +%F)
-    daily_url="${API_URL}/v1/sites/${site_key}/kpi/daily?from=${prev_from}&to=${to}"
+    prev_from=$(TZ="$tz_name" date -d "${from} - ${days} days" +%F)
+    daily_url="${API_URL}/v1/sites/${site_key}/kpi/daily?from=${prev_from}&to=${calendar_today}"
     channel_daily='{"rows":[]}'
     if channel_body=$(evo_worker_curl "$daily_url") && jq -e 'type == "object"' >/dev/null 2>&1 <<<"$channel_body"; then
         channel_daily=$channel_body
     fi
-    payload=$(summary_to_store_payload "$payload" "$channel_daily") || return 1
+    payload=$(summary_to_store_payload "$payload" "$channel_daily" "$calendar_today") || return 1
     payload_is_ok "$payload" || return 1
     printf '%s' "$payload"
 }

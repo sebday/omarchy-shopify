@@ -509,24 +509,49 @@ function seriesDelta(series) {
   return pctDelta(current, previous)
 }
 
+function todayPoint(detail, id) {
+  if (!detail || !detail.date) return null
+  if (id === "revenue") return detail.revenue
+  if (id === "orders") return detail.orders
+  if (id === "sessions") return detail.sessions
+  if (id === "spend") return detail.spend
+  if (id === "cvr") return detail.cvr
+  if (id === "aov") return detail.orders ? detail.revenue / detail.orders : null
+  if (id === "cos") {
+    if (!detail.revenue || detail.spend === null || detail.spend === undefined) return null
+    return detail.spend / detail.revenue
+  }
+  return null
+}
+
+function withToday(series, detail, id) {
+  var value = todayPoint(detail, id)
+  var base = series ? series.slice() : []
+  if (value === null || !isFinite(value) || !detail || !detail.date) return base
+  if (base.length && base[base.length - 1] && base[base.length - 1].date === detail.date) return base
+  base.push({ date: detail.date, value: value })
+  return base
+}
+
 function kpiCells(payload, metricId) {
   var p = asPayload(payload)
   if (!p.ok) return []
   var cur = currency(p)
   var d = p.today
   var specs = [
-    ["revenue", "Rev.", formatRevenue(d.revenue, cur), sparkValues(barsFor(p, "revenue")), seriesDelta(barsFor(p, "revenue"))],
-    ["orders", "Orders", formatInt(d.orders), sparkValues(barsFor(p, "orders")), seriesDelta(barsFor(p, "orders"))],
-    ["cos", "CoS", dashIfEmpty(d.cos), sparkValues(barsFor(p, "cos")), seriesDelta(barsFor(p, "cos"))],
-    ["cvr", "CvR", formatPct(d.cvr), sparkValues(barsFor(p, "cvr")), seriesDelta(barsFor(p, "cvr"))],
-    ["aov", "AoV", formatAov(d, cur), sparkValues(barsFor(p, "aov")), seriesDelta(barsFor(p, "aov"))],
-    ["sessions", "Sess.", formatInt(d.sessions), sparkValues(barsFor(p, "sessions")), seriesDelta(barsFor(p, "sessions"))],
-    ["spend", "Spend", formatMoney(d.spend, cur), sparkValues(barsFor(p, "spend")), seriesDelta(barsFor(p, "spend"))]
+    ["revenue", "Rev.", formatRevenue(d.revenue, cur)],
+    ["orders", "Orders", formatInt(d.orders)],
+    ["cos", "CoS", dashIfEmpty(d.cos)],
+    ["cvr", "CvR", formatPct(d.cvr)],
+    ["aov", "AoV", formatAov(d, cur)],
+    ["sessions", "Sess.", formatInt(d.sessions)],
+    ["spend", "Spend", formatMoney(d.spend, cur)]
   ]
   var out = []
   for (var i = 0; i < specs.length; i++) {
     var spec = specs[i]
-    var delta = spec[4]
+    var series = withToday(barsFor(p, spec[0]), d, spec[0])
+    var delta = seriesDelta(series)
     var higherIsWorse = spec[0] === "cos" || spec[0] === "spend"
     var tone = "up"
     if (delta !== null && Math.abs(delta) >= 0.05)
@@ -535,7 +560,7 @@ function kpiCells(payload, metricId) {
       id: spec[0],
       label: spec[1],
       value: spec[2],
-      spark: spec[3],
+      spark: sparkValues(series),
       delta: formatDelta(delta),
       tone: tone,
       selected: spec[0] === metricId,
