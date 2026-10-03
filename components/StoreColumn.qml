@@ -23,6 +23,7 @@ Item {
   readonly property var chartBars: Model.barsFor(safePayload, metric)
   readonly property var compareBars: Model.compareBarsFor(safePayload, metric)
   readonly property string chartFigure: Model.chartFigure(safePayload, metric)
+  readonly property var chartChange: Model.chartChange(safePayload, metric)
   readonly property string chartStyle: Model.metricById(metric).chartStyle
   readonly property var channels: Model.channelCards(safePayload)
   readonly property real channelTotal: channels.total
@@ -105,6 +106,20 @@ Item {
       color: root.textColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.display
+      font.bold: true
+    }
+
+    Text {
+      id: chartDelta
+      anchors.left: chartValue.right
+      anchors.leftMargin: Style.space(6)
+      anchors.verticalCenter: chartValue.verticalCenter
+      visible: chartValue.visible && root.chartChange.text !== ""
+      textFormat: Text.PlainText
+      text: root.chartChange.text || ""
+      color: root.chartChange.tone === "down" ? root.warnColor : root.borderColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
       font.bold: true
     }
 

@@ -451,6 +451,15 @@ function chartFigure(payload, metricId) {
   return ""
 }
 
+function chartChange(payload, metricId) {
+  if (metricId !== "revenue") return { text: "", tone: "up" }
+  var p = asPayload(payload)
+  var delta = pctDelta(p.period.revenue, p.period.prevRevenue)
+  var tone = "up"
+  if (delta !== null && Math.abs(delta) >= 0.05 && delta < 0) tone = "down"
+  return { text: formatDelta(delta), tone: tone }
+}
+
 function metricClickable(payload, id) {
   var p = asPayload(payload)
   if (!p.ok) return false
